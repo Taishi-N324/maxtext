@@ -46,6 +46,8 @@ import pyconfig
 import pathwaysutils  # pylint: disable=unused-import
 import tensorflow as tf
 
+import wandb
+
 from vertex_tensorboard import VertexTensorboardManager
 # Placeholder: internal
 
@@ -73,6 +75,26 @@ Transformer = models.Transformer
 EPS = 1e-8
 _DEFAULT_OCDBT_TARGET_DATA_FILE_SIZE = 2 * 1024**3
 
+def initialize_wandb(config):
+    """Initialize Weights & Biases logging."""
+    if jax.process_index() == 0:
+        wandb.init(
+            project="maxtext", name=config.run_name, config=vars(config)  # プロジェクト名を設定
+        )
+
+def log_metrics_to_wandb(metrics, step, is_training=True):
+    """Log metrics to Weights & Biases."""
+    if jax.process_index() == 0:
+        prefix = "" if is_training else "eval/"
+        wandb_metrics = {}
+        for key, value in metrics.get("scalar", {}).items():
+            wandb_metrics[f"{prefix}{key}"] = value
+
+        for key, value_dict in metrics.get("scalars", {}).items():
+            for sub_key, sub_value in value_dict.items():
+                wandb_metrics[f"{prefix}{key}/{sub_key}"] = sub_value
+
+        wandb.log(wandb_metrics, step=step)
 
 def validate_train_config(config):
   """Validates the configuration is set correctly for train.py"""
@@ -142,6 +164,7 @@ def write_metrics(writer, local_metrics_file, running_gcs_metrics, metrics, step
 
   if metrics_to_write:
     write_metrics_to_tensorboard(writer, metrics_to_write, steps_to_write, config, is_training)
+    log_metrics_to_wandb(metrics_to_write, steps_to_write, is_training)
 
     if config.metrics_file:
       max_utils.write_metrics_locally(metrics_to_write, steps_to_write, config, local_metrics_file, is_training)
@@ -985,6 +1008,7 @@ def main(argv: Sequence[str]) -> None:
   config = pyconfig.config
   max_utils.print_system_information()
   validate_train_config(config)
+  initialize_wandb(config)
   os.environ["TFDS_DATA_DIR"] = config.dataset_path
   vertex_tensorboard_manager = VertexTensorboardManager()
   if config.use_vertex_tensorboard or os.environ.get("UPLOAD_DATA_TO_TENSORBOARD"):
@@ -1013,6 +1037,9 @@ def main(argv: Sequence[str]) -> None:
   diagnostic_config = diagnostic_configuration.DiagnosticConfig(debug_config)
   with diagnostic.diagnose(diagnostic_config):
     train_loop(config)
+  finally:
+      if jax.process_index() == 0:
+        wandb.finish()
 
 
 if __name__ == "__main__":
