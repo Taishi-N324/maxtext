@@ -79,7 +79,7 @@ def initialize_wandb(config):
     """Initialize Weights & Biases logging."""
     if jax.process_index() == 0:
         wandb.init(
-            project="maxtext", name=config.run_name, config=vars(config)  # プロジェクト名を設定
+            project="maxtext", name=config.run_name, config=vars(config)
         )
 
 def log_metrics_to_wandb(metrics, step, is_training=True):
@@ -1037,9 +1037,8 @@ def main(argv: Sequence[str]) -> None:
   diagnostic_config = diagnostic_configuration.DiagnosticConfig(debug_config)
   with diagnostic.diagnose(diagnostic_config):
     train_loop(config)
-  finally:
-      if jax.process_index() == 0:
-        wandb.finish()
+  if jax.process_index() == 0:
+    wandb.finish()
 
 
 if __name__ == "__main__":
