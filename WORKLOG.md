@@ -79,6 +79,17 @@ gcloud compute tpus tpu-vm create ${TPU_NAME} \
 
 作り直したあと、TPUが見えるかどうかを確認してください
 
+TPUのプロセスが残ると、新規のプロセスが走らなくなります
+
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="sudo lsof -w /dev/accel0 | awk '{print \$2}' | tail -n +2 | xargs -r sudo kill -9"
+```
+
+参考 https://www.googlecloudcommunity.com/gc/Developer-Tools/TPU-POD-no-initiation/m-p/597179
+
 
 ## 参考ドキュメント
 
