@@ -25,6 +25,7 @@ import os
 import sys
 import functools
 import time
+import queue
 
 from typing import Sequence, Optional
 from absl import app
@@ -53,6 +54,8 @@ from vertex_tensorboard import VertexTensorboardManager
 
 from input_pipeline.input_pipeline_interface import create_data_iterator
 from layers import models
+
+from gcp_workload_monitor import GCPWorkloadMonitor
 
 import jax.numpy as jnp
 from jax import random
@@ -882,6 +885,15 @@ def train_loop(config, state=None):
   example_batch = None
   last_step_completion = datetime.datetime.now()
 
+  performance_metric_queue = None
+  if config.report_heartbeat_metric_for_gcp_monitoring or config.report_performance_metric_for_gcp_monitoring:
+    gcp_workload_monitor = GCPWorkloadMonitor(config.run_name)
+    if config.report_heartbeat_metric_for_gcp_monitoring:
+      gcp_workload_monitor.start_heartbeat_reporting_thread(config.heartbeat_reporting_interval_in_seconds)
+    if config.report_performance_metric_for_gcp_monitoring:
+      performance_metric_queue = queue.Queue()
+      gcp_workload_monitor.start_performance_reporting_thread(performance_metric_queue)
+
   for step in np.arange(start_step, config.steps):
     if step == first_profiling_step or prof.should_activate_periodic_profile(step):
       optional_postfix = f"step_{step}" if config.profile_periodically_period > 0 else ""
@@ -898,11 +910,11 @@ def train_loop(config, state=None):
       with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
         state, metrics = p_train_step(state, example_batch, nextrng)
 
-    new_time = datetime.datetime.now()
-    record_scalar_metrics(
-        metrics, new_time - last_step_completion, per_device_tflops, learning_rate_schedule(step), per_device_tokens
-    )
-    last_step_completion = new_time
+    step_time_delta = datetime.datetime.now() - last_step_completion
+    last_step_completion = datetime.datetime.now()
+    record_scalar_metrics(metrics, step_time_delta, per_device_tflops, learning_rate_schedule(step), per_device_tokens)
+    if performance_metric_queue:
+      performance_metric_queue.put(step_time_delta.total_seconds())
 
     if checkpoint_manager is not None:
       state_to_save = state if not config.use_dpo else _split_dpo_state(state)[0]
@@ -950,12 +962,13 @@ def train_loop(config, state=None):
         eval_dpo_reward_accuracy += float(eval_metrics["scalar"].get("evaluation/dpo_reward_accuracy", 0.0))  # for dpo only
         max_logging.log(f"Completed eval step {eval_step_count}")
         eval_step_count += 1
-      eval_loss = (
-          cumulative_eval_metrics["scalar"]["eval/total_loss"]
-          / (cumulative_eval_metrics["scalar"]["eval/total_weights"] + EPS)
-          + cumulative_eval_metrics["scalar"]["eval/moe_lb_loss"] / eval_step_count
+      eval_loss = cumulative_eval_metrics["scalar"]["eval/total_loss"] / (
+          cumulative_eval_metrics["scalar"]["eval/total_weights"] + EPS
       )
       cumulative_eval_metrics["scalar"]["eval/avg_loss"] = eval_loss
+      cumulative_eval_metrics["scalar"]["eval/avg_moe_lb_loss"] = (
+          cumulative_eval_metrics["scalar"]["eval/moe_lb_loss"] / eval_step_count
+      )
       if config.use_dpo:
         cumulative_eval_metrics["scalar"]["eval/dpo_reward_accuracy"] = eval_dpo_reward_accuracy / eval_step_count
       write_metrics(

@@ -53,6 +53,7 @@ class PathwaysConfig:
   server_image: str
   proxy_image: str
   runner_image: str
+  remote_python_sidecar_image: str
 
 
 # TODO(@vbarr): Split out parameters related to XPK workload and a General workload
@@ -72,6 +73,7 @@ class WorkloadConfig:
   priority: str = "medium"
   xpk_path: str = '~/xpk'
   pathways_config: PathwaysConfig = None
+  run_name: str = None
 
 
 @dataclasses.dataclass
@@ -374,6 +376,8 @@ def generate_xpk_workload_cmd(
         '--use-pathways'
         f' --server-image={pw_config.server_image}'
         f' --proxy-server-image={pw_config.proxy_image}'
+        f' --remote-python-sidecar-image={pw_config.remote_python_sidecar_image}'
+        if pw_config.remote_python_sidecar_image is not None else ''
         ' --termination-grace-period-seconds=300'
         f' --pathways-gcs-location={wl_config.base_output_directory}'
         f' --restart-on-user-code-failure'
@@ -454,6 +458,16 @@ def xpk_benchmark_runner(
     if return_code != 0:
       print('Unable to run xpk workload: {xpk_workload_name}')
 
+def on_device_benchmark_runner(
+    workload_configs: list[WorkloadConfig],
+):
+  for wl_config in workload_configs:
+    user_command = build_user_command(
+      name=wl_config.run_name,
+      wl_config=wl_config
+    )
+    print(f'User command: {user_command}')
+    subprocess.run(user_command, shell=True, text=True)
 
 # Run maxtext_xpk_runner.py as a script for executing multiple workloads pythonically!
 def main() -> int:
