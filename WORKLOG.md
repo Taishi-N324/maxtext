@@ -1,5 +1,11 @@
 # TPU Swallow Gemma2
 
+特定のVMインスタンスにsshする場合
+
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME}  --zone=${ZONE} --worker=${i}
+```
+
 ## 環境構築
 
 jaxをすべてのVMにインストールをします
@@ -12,6 +18,20 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --upgrade 'jax[tpu]>0.3.0' \
     -f https://storage.googleapis.com/jax-releases/libtpu_releases.html"
 ```
+
+### Filestore
+
+Filestoreを使う場合
+
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="sudo apt-get update && sudo apt-get install -y nfs-common"
+```
+
+がそれぞれのノードで必要です
+
 
 ## checkpoint convert
 
@@ -28,20 +48,17 @@ tar -xf  model.tar.gz
 ```
 
 maxtext形式へconvertします
-それぞれのVMインスタンスで実行をすると、書き込みが重複するのと、1VM内で実行できるように、CPUを指定します
-他に良い方法がある場合は教えてください
-
-```bash
-export JAX_PLATFORM_NAME=cpu
-```
 
 読み込みと書き込みのパスは適宜変更をしてください
 
 ```bash
-python MaxText/convert_gemma2_chkpt.py \
-    --base_model_path /mnt/filestore/checkpoints/gemma2-2b \
-    --maxtext_model_path /mnt/filestore/checkpoints_maxtext/gemma2-2b \
-    --model_size 2b
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+  --zone=${ZONE} \
+  --worker=all \
+  --command="cd maxtext && python MaxText/convert_gemma2_chkpt.py \
+  --base_model_path /mnt/filestore/checkpoints/gemma2-2b \
+  --maxtext_model_path /mnt/filestore/checkpoints_maxtext/gemma2-2b \
+  --model_size 2b"
 ```
 
 ## 参考
