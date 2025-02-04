@@ -84,7 +84,11 @@ class HuggingFaceDatasetUploader:
         try:
             # プライベートリポジトリとして作成
             create_repo(
-                repo_id=repo_name, token=self.token, repo_type="dataset", private=True
+                repo_id=repo_name,
+                token=self.token,
+                repo_type="dataset",
+                private=True,
+                exist_ok=True,
             )
             self.logger.info(f"プライベートリポジトリ '{repo_name}' を作成しました")
 
