@@ -19,6 +19,14 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     -f https://storage.googleapis.com/jax-releases/libtpu_releases.html"
 ```
 
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="cd maxtext && bash setup.sh"
+```
+
+
 ### Filestore
 
 Filestoreを使う場合
@@ -38,9 +46,22 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
 flax形式のcheckpointをダウンロードをしてきます
 
 ```bash
+export KAGGLE_USERNAME=
+export KAGGLE_KEY=
+```
+
+```bash
 curl -L -u $KAGGLE_USERNAME:$KAGGLE_KEY \
   -o /mnt/filestore/checkpoints/model.tar.gz \
   https://www.kaggle.com/api/v1/models/google/gemma-2/flax/gemma2-2b/1/download
+```
+
+9Bもダウンロードできます
+
+```bash
+curl -L -u $KAGGLE_USERNAME:$KAGGLE_KEY \
+  -o /mnt/filestore/checkpoints/model.tar.gz \
+  https://www.kaggle.com/api/v1/models/google/gemma-2/flax/gemma2-9b/1/download
 ```
 
 ```bash
@@ -49,16 +70,27 @@ tar -xf  model.tar.gz
 
 maxtext形式へconvertします
 
+cpuに指定をし、すべてのtpuでの実行待ち or すべてのworkerからの書き込みを防ぎます
+
+```bash
+export JAX_PLATFORMS=cpu
+export JAX_THREADED_P_MAP=false
+```
+
 読み込みと書き込みのパスは適宜変更をしてください
 
 ```bash
-gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
-  --zone=${ZONE} \
-  --worker=all \
-  --command="cd maxtext && python MaxText/convert_gemma2_chkpt.py \
+python MaxText/convert_gemma2_chkpt.py \
   --base_model_path /mnt/filestore/checkpoints/gemma2-2b \
   --maxtext_model_path /mnt/filestore/checkpoints_maxtext/gemma2-2b \
-  --model_size 2b"
+  --model_size 2b
+```
+
+```bash
+python MaxText/convert_gemma2_chkpt.py \
+  --base_model_path /mnt/filestore/checkpoints/gemma2_9b_pt \
+  --maxtext_model_path /mnt/filestore/checkpoints_maxtext/gemma2-9b \
+  --model_size 9b
 ```
 
 ## 参考
@@ -87,6 +119,8 @@ RuntimeError: Unable to initialize backend 'tpu': INTERNAL: Failed to get global
 gcloud compute tpus tpu-vm delete ${TPU_NAME} --zone=${ZONE}
 ```
 
+accelerator-typeは適宜変更しましょう
+
 ```bash
 gcloud compute tpus tpu-vm create ${TPU_NAME} \
   --zone=${ZONE} \
@@ -112,3 +146,4 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
 
 https://cloud.google.com/filestore/docs/service-tiers?hl=ja
 https://cloud.google.com/tpu/docs/v4?hl=ja
+https://github.com/AI-Hypercomputer/cloud-accelerator-diagnostics/tree/main/tpu_info
