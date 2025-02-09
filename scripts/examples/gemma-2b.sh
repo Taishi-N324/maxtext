@@ -17,9 +17,9 @@ export CONVERTED_CHECKPOINT="/mnt/filestore/checkpoints_maxtext/gemma2-2b/0/item
 export LIBTPU_INIT_ARGS="--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACORE_DENSE"
 
 # はやくならない
- --xla_enable_async_collective_permute=true
- --xla_tpu_enable_async_collective_fusion=true
- --xla_tpu_overlap_compute_collective_tc=true
+#  --xla_enable_async_collective_permute=true
+#  --xla_tpu_enable_async_collective_fusion=true
+#  --xla_tpu_overlap_compute_collective_tc=true
 
 
 # 他の参考
