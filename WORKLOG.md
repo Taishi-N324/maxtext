@@ -1,5 +1,10 @@
 # TPU Swallow Gemma2
 
+```bash
+export TPU_NAME=
+export ZONE=
+```
+
 特定のVMインスタンスにsshする場合
 
 ```bash
@@ -8,7 +13,40 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME}  --zone=${ZONE} --worker=${i}
 
 ## 環境構築
 
-jaxをすべてのVMにインストールをします
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="sudo apt-get update && sudo apt-get install -y nfs-common"
+```
+
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="sudo apt-get update && sudo apt-get install -y nfs-kernel-server"
+```
+
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="sudo modprobe nfs && sudo modprobe nfsd"
+```
+
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="sudo mkdir -p /mnt/filestore && sudo mount -t nfs 10.77.37.202:/swallow /mnt/filestore && echo '10.77.37.202:/swallow /mnt/filestore nfs defaults 0 0' | sudo tee -a /etc/fstab"
+```
+
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="sudo chmod -R 777 /mnt/filestore"
+```
 
 ```bash
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
@@ -23,22 +61,17 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --zone=${ZONE} \
     --worker=all \
-    --command="cd maxtext && bash setup.sh"
+    --command="git clone https://github.com/Taishi-N324/maxtext.git && cd maxtext && git switch swallow"
 ```
-
-
-### Filestore
-
-Filestoreを使う場合
 
 ```bash
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --zone=${ZONE} \
     --worker=all \
-    --command="sudo apt-get update && sudo apt-get install -y nfs-common"
+    --command="cd maxtext && bash setup.sh"
 ```
 
-がそれぞれのノードで必要です
+wandbもloginする
 
 
 ## checkpoint convert
