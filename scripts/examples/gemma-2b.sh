@@ -5,11 +5,11 @@ export HF_HOME=/mnt/filestore/.cache
 export HUGGINGFACE_HUB_CACHE=/mnt/filestore/.cache
 
 export DATASET_TYPE="grain"
-export GRAIN_TRAIN_FILES="/mnt/filestore/gemma_tpu_grain/ja_wiki_merged.arecord"
-export GRAIN_EVAL_FILES="/mnt/filestore/gemma_tpu_grain/ja_wiki_merged.arecord"
+export GRAIN_TRAIN_FILES="/mnt/filestore/gemma_tpu_grain/**/*.arecord"
+export GRAIN_EVAL_FILES="/mnt/filestore/gemma_tpu_grain/**/*.arecord"
 export TOKENIZER_PATH="/mnt/filestore/tokenizers/gemma-2b/tokenizer.model" #modelファイルのパス
 export BASE_OUTPUT_DIRECTORY="/mnt/filestore/checkpoints"  
-export RUN_NAME="profiler"  
+export RUN_NAME="grain_test_$(date +%Y-%m-%d-%H-%M)"  
 export MODEL_NAME="gemma2-2b"      
 export CONVERTED_CHECKPOINT="/mnt/filestore/checkpoints_maxtext/gemma2-2b/0/items"
 
@@ -31,9 +31,10 @@ export LIBTPU_INIT_ARGS="--xla_enable_async_all_gather=true TPU_MEGACORE=MEGACOR
 cd maxtext
 
 # すでに実行中のプロセスがあれば終了させる
-pkill -9 python
+# pkill -9 python
+# pkill -9 jax
 
-python3 MaxText/train.py MaxText/configs/base.yml \
+python3 -u MaxText/train.py MaxText/configs/base.yml \
     dataset_type=${DATASET_TYPE} \
     grain_train_files=${GRAIN_TRAIN_FILES} \
     grain_eval_files=${GRAIN_EVAL_FILES} \
@@ -46,8 +47,8 @@ python3 MaxText/train.py MaxText/configs/base.yml \
     gradient_accumulation_steps=8 \
     grain_worker_count=8 \
     max_target_length=8192 \
-    steps=10000 \
-    checkpoint_period=10000 \
+    steps=1000 \
+    checkpoint_period=500 \
     enable_checkpointing=true \
     ici_tensor_parallelism=1 \
     dcn_tensor_parallelism=1 \

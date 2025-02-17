@@ -31,7 +31,8 @@ import multihost_dataloading
 
 def get_datasets(data_file_pattern):
   """Load dataset from array_record files for using with grain"""
-  data_files = glob.glob(str(Path(data_file_pattern).expanduser().resolve()))
+  # data_files = glob.glob(str(Path(data_file_pattern).expanduser().resolve()))
+  data_files = glob.glob(str(Path(data_file_pattern).expanduser()), recursive=True)
   dataset = grain.ArrayRecordDataSource(data_files)
   return dataset
 
