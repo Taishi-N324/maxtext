@@ -81,6 +81,15 @@ def load_hf_model(model_size):
   elif model_size == "llama3.1-8b":
     config = AutoConfig.from_pretrained("meta-llama/Llama-3.1-8B")
     model = AutoModelForCausalLM.from_config(config)
+  elif model_size == "gemma2-2b":
+      config = AutoConfig.from_pretrained("google/gemma-2-2b")
+      model = AutoModelForCausalLM.from_config(config)
+  elif model_size == "gemma2-9b":
+      config = AutoConfig.from_pretrained("google/gemma-2-9b")
+      model = AutoModelForCausalLM.from_config(config)
+  elif model_size == "gemma2-27b":
+      config = AutoConfig.from_pretrained("google/gemma-2-27b")
+      model = AutoModelForCausalLM.from_config(config)
   else:
     raise NotImplementedError
   return model
@@ -107,6 +116,283 @@ def load_model_state(config):
   return training_state
 
 
+def convert_gemma2_state_to_hf(training_state, model_size):
+  """
+  Port the parameters from the Orbax training_state into the hf_model
+  """
+  model_params = llama_or_mistral_ckpt.MODEL_PARAMS_DICT[model_size]
+  base_num_decoder_layers = model_params["num_layers"]
+  base_num_query_heads = model_params["num_heads"]
+  head_dim = model_params["dims_per_head"]
+  base_num_kv_heads = model_params["num_kv_heads"]
+  base_emb_dim = model_params["base_emb_dim"]
+  base_mlp_dim = model_params["base_mlp_dim"]
+  num_experts = model_params["num_experts"] if "num_experts" in model_params else None
+
+  hf_model_params = {}
+
+  # Port the embedding weights
+  hf_model_params["model.embed_tokens.weight"] = torch.tensor(
+      np.asarray(training_state.params["params"]["token_embedder"]["embedding"]),
+      dtype=torch.bfloat16,
+  )
+
+  for layer_int in tqdm(
+      range(base_num_decoder_layers), desc="Porting parameters layerwise"
+  ):
+      print(f"Converting weights for layer {layer_int}")
+
+      # Attention layers
+      # local layer
+      if layer_int % 2:
+          hf_model_params[f"model.layers.{layer_int}.self_attn.q_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      unpermute_from_match_maxtext_rope(
+                          reverse_scale(
+                              training_state.params["params"]["decoder"]["layers"][
+                                  "self_attention_local"
+                              ]["query"]["kernel"][:, layer_int, :, :],
+                              head_dim,
+                          ),
+                          model_size,
+                      )
+                      .reshape(base_num_query_heads * head_dim, base_emb_dim)
+                      .T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+
+          hf_model_params[f"model.layers.{layer_int}.self_attn.k_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      unpermute_from_match_maxtext_rope(
+                          training_state.params["params"]["decoder"]["layers"][
+                              "self_attention_local"
+                          ]["key"]["kernel"][:, layer_int, :, :],
+                          model_size,
+                      )
+                      .reshape(base_emb_dim, base_num_kv_heads * head_dim)
+                      .T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+          hf_model_params[f"model.layers.{layer_int}.self_attn.v_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "self_attention_local"
+                      ]["value"]["kernel"][:, layer_int, :, :]
+                      .reshape(base_emb_dim, base_num_kv_heads * head_dim)
+                      .T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+          hf_model_params[f"model.layers.{layer_int}.self_attn.o_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "self_attention_local"
+                      ]["out"]["kernel"][:, layer_int, :, :]
+                      .reshape(base_num_query_heads * head_dim, base_emb_dim)
+                      .T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+      # global
+      else:
+          hf_model_params[f"model.layers.{layer_int}.self_attn.q_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      unpermute_from_match_maxtext_rope(
+                          reverse_scale(
+                              training_state.params["params"]["decoder"]["layers"][
+                                  "self_attention_global"
+                              ]["query"]["kernel"][:, layer_int, :, :],
+                              head_dim,
+                          ),
+                          model_size,
+                      )
+                      .reshape(base_num_query_heads * head_dim, base_emb_dim)
+                      .T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+
+          hf_model_params[f"model.layers.{layer_int}.self_attn.k_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      unpermute_from_match_maxtext_rope(
+                          training_state.params["params"]["decoder"]["layers"][
+                              "self_attention_global"
+                          ]["key"]["kernel"][:, layer_int, :, :],
+                          model_size,
+                      )
+                      .reshape(base_emb_dim, base_num_kv_heads * head_dim)
+                      .T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+          hf_model_params[f"model.layers.{layer_int}.self_attn.v_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "self_attention_global"
+                      ]["value"]["kernel"][:, layer_int, :, :]
+                      .reshape(base_emb_dim, base_num_kv_heads * head_dim)
+                      .T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+          hf_model_params[f"model.layers.{layer_int}.self_attn.o_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "self_attention_global"
+                      ]["out"]["kernel"][:, layer_int, :, :]
+                      .reshape(base_num_query_heads * head_dim, base_emb_dim)
+                      .T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+
+      # MLP Layers
+      # local layer
+      if layer_int % 2:
+          hf_model_params[f"model.layers.{layer_int}.mlp.gate_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "mlp_local"
+                      ]["wi_0"]["kernel"][:, layer_int, :].T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+          hf_model_params[f"model.layers.{layer_int}.mlp.up_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "mlp_local"
+                      ]["wi_1"]["kernel"][:, layer_int, :].T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+          hf_model_params[f"model.layers.{layer_int}.mlp.down_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "mlp_local"
+                      ]["wo"]["kernel"][:, layer_int, :].T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+      # global
+      else:
+          hf_model_params[f"model.layers.{layer_int}.mlp.gate_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "mlp_global"
+                      ]["wi_0"]["kernel"][:, layer_int, :].T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+          hf_model_params[f"model.layers.{layer_int}.mlp.up_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "mlp_global"
+                      ]["wi_1"]["kernel"][:, layer_int, :].T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+          hf_model_params[f"model.layers.{layer_int}.mlp.down_proj.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "mlp_global"
+                      ]["wo"]["kernel"][:, layer_int, :].T
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+
+      # Pre/post attention layer norm
+      # local layer
+      if layer_int % 2:
+          hf_model_params[f"model.layers.{layer_int}.input_layernorm.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "pre_self_attention_norm_local"
+                      ]["scale"][:, layer_int].reshape(base_emb_dim)
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+          hf_model_params[
+              f"model.layers.{layer_int}.post_attention_layernorm.weight"
+          ] = torch.tensor(
+              np.asarray(
+                  training_state.params["params"]["decoder"]["layers"][
+                      "post_self_attention_norm_local"
+                  ]["scale"][:, layer_int].reshape(base_emb_dim)
+              ),
+              dtype=torch.bfloat16,
+          )
+      # global
+      else:
+          hf_model_params[f"model.layers.{layer_int}.input_layernorm.weight"] = (
+              torch.tensor(
+                  np.asarray(
+                      training_state.params["params"]["decoder"]["layers"][
+                          "pre_self_attention_norm_global"
+                      ]["scale"][:, layer_int].reshape(base_emb_dim)
+                  ),
+                  dtype=torch.bfloat16,
+              )
+          )
+          hf_model_params[
+              f"model.layers.{layer_int}.post_attention_layernorm.weight"
+          ] = torch.tensor(
+              np.asarray(
+                  training_state.params["params"]["decoder"]["layers"][
+                      "post_self_attention_norm_global"
+                  ]["scale"][:, layer_int].reshape(base_emb_dim)
+              ),
+              dtype=torch.bfloat16,
+          )
+
+  # LM head and layernorm
+  if model_size == "gemma2-2b":
+    hf_model_params["lm_head.weight"] = torch.tensor(
+        np.asarray(training_state.params["params"]["decoder"]["logits_dense"]["kernel"].T), dtype=torch.float16
+    )
+  hf_model_params["model.norm.weight"] = torch.tensor(
+      np.asarray(
+          training_state.params["params"]["decoder"]["decoder_norm"]["scale"].reshape(
+              base_emb_dim
+          )
+      ),
+      dtype=torch.bfloat16,
+  )
+
+  return hf_model_params
+  
+
 def convert_state_to_hf(training_state, model_size):
   """
   Port the parameters from the Orbax training_state into the hf_model
@@ -115,6 +401,8 @@ def convert_state_to_hf(training_state, model_size):
   if model_size not in llama_or_mistral_ckpt.MODEL_PARAMS_DICT:
     raise NotImplementedError
 
+  if model_size.startswith("gemma2-"):
+    return convert_gemma2_state_to_hf(training_state, model_size)
   # Load the model specific parameters
   model_params = llama_or_mistral_ckpt.MODEL_PARAMS_DICT[model_size]
   base_num_decoder_layers = model_params["num_layers"]
