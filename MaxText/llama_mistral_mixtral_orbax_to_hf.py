@@ -102,15 +102,12 @@ def load_hf_model(model_size):
         model = AutoModelForCausalLM.from_config(config)
     elif model_size == "gemma2-2b":
         config = AutoConfig.from_pretrained("google/gemma-2-2b")
-        config.vocab_size = 256128
         model = AutoModelForCausalLM.from_config(config)
     elif model_size == "gemma2-9b":
         config = AutoConfig.from_pretrained("google/gemma-2-9b")
-        config.vocab_size = 256128
         model = AutoModelForCausalLM.from_config(config)
     elif model_size == "gemma2-27b":
         config = AutoConfig.from_pretrained("google/gemma-2-27b")
-        config.vocab_size = 256128
         model = AutoModelForCausalLM.from_config(config)
     else:
         raise NotImplementedError
@@ -148,17 +145,35 @@ def convert_gemma2_state_to_hf(training_state, model_size):
     head_dim = model_params["dims_per_head"]
     base_num_kv_heads = model_params["num_kv_heads"]
     base_emb_dim = model_params["base_emb_dim"]
-    base_mlp_dim = model_params["base_mlp_dim"]
 
     hf_model_params = {}
 
-    # Port the embedding weights
+    # ------------------------------------------------------------------------
+    # 1) Convert token embedding
+    # ------------------------------------------------------------------------
+    # Typically padded from [256000, d_emb] up to [256128, d_emb].
+    # Also must be divided by sqrt(d_emb) for the HF format.
+    raw_embed = training_state.params["params"]["token_embedder"]["embedding"]
+
+    # Force a writable copy, cast to float32 or bfloat16 as you prefer
+    embedding = np.array(raw_embed, copy=True)
+
+    # Slice away any padding if you know your model is padded to 256128
+    embedding = embedding[:256000, :]
+
+    # "Reverse" (or apply) scaling by sqrt(d_model).
+    # Typically, if MaxText multiplied the embedding by sqrt(d_emb), we must now
+    # *divide* to get the original HF scale. Or if HF expects them scaled, we do the opposite.
+    # Let’s assume HF wants them smaller, so do: embedding /= sqrt(d_emb).
+    embedding /= np.sqrt(base_emb_dim)
+
     hf_model_params["model.embed_tokens.weight"] = torch.tensor(
-        np.asarray(training_state.params["params"]["token_embedder"]["embedding"]),
-        dtype=torch.bfloat16,
+        embedding, dtype=torch.bfloat16
     )
 
-    # Iterate through HuggingFace layers
+    # ------------------------------------------------------------------------
+    # 2) Map each decoder layer
+    # ------------------------------------------------------------------------
     for hf_layer_idx in tqdm(
         range(base_num_decoder_layers), desc="Porting parameters layerwise"
     ):
@@ -179,7 +194,9 @@ def convert_gemma2_state_to_hf(training_state, model_size):
         pre_ffw_norm_key = f"pre_ffw_norm_{layer_type}"
         post_ffw_norm_key = f"post_ffw_norm_{layer_type}"
 
-        # Attention layers
+        # --------------------------------------------------------------------
+        # Attention mapping
+        # --------------------------------------------------------------------
         hf_model_params[f"model.layers.{hf_layer_idx}.self_attn.q_proj.weight"] = (
             torch.tensor(
                 np.asarray(
@@ -199,6 +216,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
             )
         )
 
+        # K-proj
         hf_model_params[f"model.layers.{hf_layer_idx}.self_attn.k_proj.weight"] = (
             torch.tensor(
                 np.asarray(
@@ -215,6 +233,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
             )
         )
 
+        # V-proj
         hf_model_params[f"model.layers.{hf_layer_idx}.self_attn.v_proj.weight"] = (
             torch.tensor(
                 np.asarray(
@@ -228,6 +247,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
             )
         )
 
+        # Out-proj
         hf_model_params[f"model.layers.{hf_layer_idx}.self_attn.o_proj.weight"] = (
             torch.tensor(
                 np.asarray(
@@ -241,7 +261,9 @@ def convert_gemma2_state_to_hf(training_state, model_size):
             )
         )
 
-        # MLP Layers
+        # --------------------------------------------------------------------
+        # MLP mapping
+        # --------------------------------------------------------------------
         hf_model_params[f"model.layers.{hf_layer_idx}.mlp.gate_proj.weight"] = (
             torch.tensor(
                 np.asarray(
@@ -275,8 +297,9 @@ def convert_gemma2_state_to_hf(training_state, model_size):
             )
         )
 
-        # Layer Norms
-        # Pre-attention layer norm (input_layernorm in HF)
+        # --------------------------------------------------------------------
+        # Norm layers (Gemma2 uses RMSNorm, MaxText's scale param => scale-1.0)
+        # --------------------------------------------------------------------
         hf_model_params[f"model.layers.{hf_layer_idx}.input_layernorm.weight"] = (
             torch.tensor(
                 np.asarray(
@@ -290,7 +313,6 @@ def convert_gemma2_state_to_hf(training_state, model_size):
             )
         )
 
-        # Post-attention layer norm
         hf_model_params[
             f"model.layers.{hf_layer_idx}.post_attention_layernorm.weight"
         ] = torch.tensor(
@@ -304,7 +326,6 @@ def convert_gemma2_state_to_hf(training_state, model_size):
             dtype=torch.bfloat16,
         )
 
-        # Pre-feedforward layer norm
         hf_model_params[
             f"model.layers.{hf_layer_idx}.pre_feedforward_layernorm.weight"
         ] = torch.tensor(
@@ -318,7 +339,6 @@ def convert_gemma2_state_to_hf(training_state, model_size):
             dtype=torch.bfloat16,
         )
 
-        # Post-feedforward layer norm
         hf_model_params[
             f"model.layers.{hf_layer_idx}.post_feedforward_layernorm.weight"
         ] = torch.tensor(
@@ -332,8 +352,11 @@ def convert_gemma2_state_to_hf(training_state, model_size):
             dtype=torch.bfloat16,
         )
 
-    # LM head and final layernorm
-    if not model_size == "gemma2-2b":
+    # ------------------------------------------------------------------------
+    # 3) LM head & final norm
+    # ------------------------------------------------------------------------
+    # Some Gemma2 variants tie embeddings, but typically:
+    if model_size != "gemma2-2b":
         hf_model_params["lm_head.weight"] = torch.tensor(
             np.asarray(
                 training_state.params["params"]["decoder"]["logits_dense"]["kernel"].T
@@ -341,7 +364,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
             dtype=torch.bfloat16,
         )
 
-    # Final norm with scaling function
+    # Final RMSNorm
     norm_arr = np.asarray(
         training_state.params["params"]["decoder"]["decoder_norm"]["scale"].reshape(
             base_emb_dim
