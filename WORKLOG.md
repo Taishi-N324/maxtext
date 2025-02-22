@@ -97,6 +97,14 @@ curl -L -u $KAGGLE_USERNAME:$KAGGLE_KEY \
   https://www.kaggle.com/api/v1/models/google/gemma-2/flax/gemma2-9b/1/download
 ```
 
+27B
+
+```bash
+curl -L -u $KAGGLE_USERNAME:$KAGGLE_KEY \
+  -o /mnt/filestore/checkpoints/model.tar.gz \
+  https://www.kaggle.com/api/v1/models/google/gemma-2/flax/gemma2-27b/1/download
+```
+
 ```bash
 tar -xf  model.tar.gz
 ```
@@ -124,6 +132,13 @@ python MaxText/convert_gemma2_chkpt.py \
   --base_model_path /mnt/filestore/checkpoints/gemma2_9b_pt \
   --maxtext_model_path /mnt/filestore/checkpoints_maxtext/gemma2-9b \
   --model_size 9b
+```
+
+```bash
+python MaxText/convert_gemma2_chkpt.py \
+  --base_model_path /mnt/filestore/checkpoints/27bpt/gemma2_27b_pt \
+  --maxtext_model_path /mnt/filestore/checkpoints_maxtext/gemma2-27b \
+  --model_size 27b
 ```
 
 ## 参考
