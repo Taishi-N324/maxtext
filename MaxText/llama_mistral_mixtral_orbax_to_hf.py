@@ -353,17 +353,8 @@ def convert_gemma2_state_to_hf(training_state, model_size):
         )
 
     # ------------------------------------------------------------------------
-    # 3) LM head & final norm
+    # 3) final norm
     # ------------------------------------------------------------------------
-    # Some Gemma2 variants tie embeddings, but typically:
-    if model_size != "gemma2-2b":
-        hf_model_params["lm_head.weight"] = torch.tensor(
-            np.asarray(
-                training_state.params["params"]["decoder"]["logits_dense"]["kernel"].T
-            ),
-            dtype=torch.bfloat16,
-        )
-
     # Final RMSNorm
     norm_arr = np.asarray(
         training_state.params["params"]["decoder"]["decoder_norm"]["scale"].reshape(
