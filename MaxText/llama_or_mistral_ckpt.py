@@ -139,6 +139,33 @@ MODEL_PARAMS_DICT = {
         "base_mlp_dim": 16384,
         "num_experts": 8,
     },
+    "gemma2-2b": {
+        "num_layers": 26,
+        "num_heads": 8,
+        "num_kv_heads": 4,
+        "dims_per_head": 256,
+        "base_emb_dim": 2304,
+        "base_mlp_dim": 9216,
+        "vocab": 256000,
+    },
+    "gemma2-9b": {
+        "num_layers": 42,
+        "num_heads": 16,
+        "num_kv_heads": 8,
+        "dims_per_head": 256,
+        "base_emb_dim": 3584,
+        "base_mlp_dim": 14336,
+        "vocab": 256000,
+    },
+    "gemma2-27b": {
+        "num_layers": 46,
+        "num_heads": 32,
+        "num_kv_heads": 16,
+        "dims_per_head": 128,
+        "base_emb_dim": 4608,
+        "base_mlp_dim": 36864,
+        "vocab": 256000,
+    },
 }
 
 SIMULATED_CPU_DEVICES_COUNT = 16
