@@ -49,7 +49,7 @@ def compare_models(model_path1, model_path2):
         "embed_tokens",
         model1.embed_tokens.weight,
         model2.embed_tokens.weight,
-        0.007813,  # 0.007813 ≈ 1/128
+        0.015626,  # 0.015626 ≈ 1/64
         vocab_size=256000,
     )
 
