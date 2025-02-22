@@ -82,7 +82,7 @@ def initialize_wandb(config):
     """Initialize Weights & Biases logging."""
     if jax.process_index() == 0:
         wandb.init(
-            project="maxtext", name=config.run_name, config=vars(config)
+            entity="prj-jalm", project="gemma_tpu", name=config.run_name, config=vars(config)
         )
 
 def log_metrics_to_wandb(metrics, step, is_training=True):
