@@ -3,6 +3,7 @@
 ```bash
 export TPU_NAME=
 export ZONE=
+export WANDB_PASSWORD=
 ```
 
 特定のVMインスタンスにsshする場合
@@ -64,6 +65,16 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --command="git clone https://github.com/Taishi-N324/maxtext.git && cd maxtext && git switch swallow"
 ```
 
+
+TPU v6eでは先に以下のコマンドを実行する必要があります。
+
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="pip install 'setuptools==67.8.0'"
+```
+
 ```bash
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --zone=${ZONE} \
@@ -71,7 +82,14 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --command="cd maxtext && bash setup.sh"
 ```
 
-wandbもloginする
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \\
+    --zone=${ZONE} \\
+    --worker=all \\
+    --command="echo 'machine api.wandb.ai\
+  login user\
+  password ${WANDB_PASSWORD}' > ~/.netrc"
+```
 
 
 ## checkpoint convert
@@ -149,6 +167,8 @@ python MaxText/convert_gemma2_chkpt.py \
 RuntimeError: Unable to initialize backend 'tpu': INTERNAL: Failed to get global TPU topology. (set JAX_PLATFORMS='' to automatically choose an available backend)
 ```
 
+## TPU v4
+
 `/dev/accel*`で
 
 ```
@@ -189,6 +209,36 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
 
 参考 https://www.googlecloudcommunity.com/gc/Developer-Tools/TPU-POD-no-initiation/m-p/597179
 
+## TPU v6
+
+v6でVMを作成する時は、`v2-alpha-tpuv6e`を使用します : ref https://cloud.google.com/tpu/docs/runtimes?hl=ja#tensorflow
+
+spotでの利用でない場合はspotは不要です
+
+```bash
+gcloud compute tpus tpu-vm create ${TPU_NAME} \
+  --zone=${ZONE} \
+  --accelerator-type=v6e-256 \
+  --version=v2-alpha-tpuv6e \
+  --spot
+```
+
+v4とは異なり、`/dev/vfio/{0,1,2,3}` にChipが存在します
+
+```bash
+pip install tpu-info
+```
+
+`tpu-info` コマンドでChipが見れます。
+
+v6で tpuでのプロセスをkillするコマンドは以下です。
+
+```bash
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+  --zone=${ZONE} \
+  --worker=all \
+  --command="sudo lsof -w /dev/vfio/* | awk '{print \$2}' | tail -n +2 | xargs -r sudo kill -9"
+```
 
 ## 参考ドキュメント
 
