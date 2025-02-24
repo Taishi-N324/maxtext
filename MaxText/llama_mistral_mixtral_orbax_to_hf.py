@@ -64,11 +64,20 @@ def unpermute_from_match_maxtext_rope(arr, model_size):
     return jax.numpy.concatenate((evens, odds), axis=arr.ndim - 1)
 
 
-def reverse_scale(arr, scale):
+def reverse_scale(arr, head_dim, model_size):
     """
     MaxText has the scaling factor included into the weights,
     we reverse it when writing out the HuggingFace checkpoint
     """
+    if model_size == "gemma2-27b":
+        # TODO remove hard-coded
+        # https://huggingface.co/google/gemma-2-27b/blob/main/config.json#L15
+        # https://huggingface.co/google/gemma-2-27b/blob/main/config.json#L20
+        # https://github.com/Taishi-N324/maxtext/blob/c325f606ccc4d44b72fbf08e0173125b4ba54c2b/MaxText/convert_gemma2_chkpt.py#L79-L80
+        # 4608 / 32
+        scale = 144
+    else:
+        scale = head_dim
     return arr * np.sqrt(scale)
 
 
@@ -206,6 +215,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                                 attention_key
                             ]["query"]["kernel"][:, maxtext_layer_idx, :, :],
                             head_dim,
+                            model_size,
                         ),
                         model_size,
                     )
@@ -410,6 +420,7 @@ def convert_state_to_hf(training_state, model_size):
                                 "self_attention"
                             ]["query"]["kernel"][:, layer_int, :, :],
                             head_dim,
+                            model_size,
                         ),
                         model_size,
                     )
