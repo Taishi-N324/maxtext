@@ -4,6 +4,7 @@
 export TPU_NAME=
 export ZONE=
 export WANDB_PASSWORD=
+export FILESTORE_IP=
 ```
 
 特定のVMインスタンスにsshする場合
@@ -39,14 +40,7 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --zone=${ZONE} \
     --worker=all \
-    --command="sudo mkdir -p /mnt/filestore && sudo mount -t nfs 10.77.37.202:/swallow /mnt/filestore && echo '10.77.37.202:/swallow /mnt/filestore nfs defaults 0 0' | sudo tee -a /etc/fstab"
-```
-
-```bash
-gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
-    --zone=${ZONE} \
-    --worker=all \
-    --command="sudo chmod -R 777 /mnt/filestore"
+    --command="sudo mkdir -p /mnt/filestore && sudo mount -t nfs ${FILESTORE_IP}:/swallow /mnt/filestore && echo '${FILESTORE_IP}:/swallow /mnt/filestore nfs defaults 0 0' | sudo tee -a /etc/fstab"
 ```
 
 ```bash
@@ -91,6 +85,15 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \\
   password ${WANDB_PASSWORD}' > ~/.netrc"
 ```
 
+
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="echo 'machine api.wandb.ai
+  login user
+  password ${WANDB_PASSWORD}' > ~/.netrc"
+
+`scripts/environment/v6e_install.sh`　を実行することでここまでの環境構築を実行できます
 
 ## checkpoint convert
 
