@@ -179,6 +179,20 @@ scripts/ckpt_convert/gemma2_9b/exp2.sh
 scripts/ckpt_convert/gemma2_2b/exp2.sh
 ```
 
+### HFへのupload
+
+HFのログインをします
+
+```bash
+huggingface-cli login
+```
+
+下記のスクリプトを参考にしてください
+
+```
+scripts/ckpt_convert/upload.sh
+```
+
 ## 参考
 
 以下のようなエラーが出るときは、
