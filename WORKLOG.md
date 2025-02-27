@@ -162,6 +162,37 @@ python MaxText/convert_gemma2_chkpt.py \
   --model_size 27b
 ```
 
+### HF形式への checkpoint convert
+
+27Bのconvertに必要なCPUメモリが ~524GBなので、v6e-4での作業をお勧めします
+
+torchのインストールをします
+
+```bash
+pip install torch
+```
+
+下記のスクリプトを参考にしてください
+
+```
+scripts/ckpt_convert/gemma2_9b/exp2.sh
+scripts/ckpt_convert/gemma2_2b/exp2.sh
+```
+
+### HFへのupload
+
+HFのログインをします
+
+```bash
+huggingface-cli login
+```
+
+下記のスクリプトを参考にしてください
+
+```
+scripts/ckpt_convert/upload.sh
+```
+
 ## 参考
 
 以下のようなエラーが出るときは、
