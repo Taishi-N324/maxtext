@@ -164,18 +164,13 @@ def convert_gemma2_state_to_hf(training_state, model_size):
     # Also must be divided by sqrt(d_emb) for the HF format.
     raw_embed = training_state.params["params"]["token_embedder"]["embedding"]
 
-    # Force a writable copy, cast to float32 or float32 as you prefer
-    embedding = np.array(raw_embed, copy=True, dtype=np.float32)
-
-    # Slice away any padding if you know your model is padded to 256128
-    embedding = embedding[:256000, :]
+    # Force a writable copy, cast to float32
+    embedding = np.array(raw_embed, copy=True, dtype=np.float32)[:256000, :]
 
     # "Reverse" (or apply) scaling by sqrt(d_model).
-    # Typically, if MaxText multiplied the embedding by sqrt(d_emb), we must now
-    # *divide* to get the original HF scale. Or if HF expects them scaled, we do the opposite.
-    # Let’s assume HF wants them smaller, so do: embedding /= sqrt(d_emb).
-    scale_factor = base_emb_dim**-0.5
-    embedding *= scale_factor
+    normalizer = np.float32(np.sqrt(base_emb_dim))
+
+    embedding = embedding / normalizer
 
     hf_model_params["model.embed_tokens.weight"] = torch.tensor(
         embedding, dtype=torch.float32
