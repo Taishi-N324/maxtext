@@ -22,9 +22,9 @@ To save a ckpt
 python3 MaxText/llama_or_mistral_ckpt.py --base-model-path <path/to/meta/ckpt> \
     --maxtext-model-path <GCS/path/to/save/new/maxtext/ckpt> --model-size llama2-7b
 
-python3 MaxText/llama_mistral_mixtral_orbax_to_hf.py MaxText/configs/base.yml 
+python3 MaxText/llama_mistral_mixtral_orbax_to_hf.py MaxText/configs/base.yml
             base_output_directory=path/to/saving/intermediate_MaxText_files
-            load_parameters_path=/path/to/MaxText/checkpoint run_name=<your run name> model_name=<llama2 or mistral> 
+            load_parameters_path=/path/to/MaxText/checkpoint run_name=<your run name> model_name=<llama2 or mistral>
             hardware=gpu
             hf_model_path=/local/path/to/save/HF/model/to
 
@@ -161,23 +161,11 @@ def convert_gemma2_state_to_hf(training_state, model_size):
     # 1) Convert token embedding
     # ------------------------------------------------------------------------
     # Typically padded from [256000, d_emb] up to [256128, d_emb].
-    # Also must be divided by sqrt(d_emb) for the HF format.
     raw_embed = training_state.params["params"]["token_embedder"]["embedding"]
-
-    # Force a writable copy, cast to float32 or bfloat16 as you prefer
-    embedding = np.array(raw_embed, copy=True)
-
-    # Slice away any padding if you know your model is padded to 256128
-    embedding = embedding[:256000, :]
-
-    # "Reverse" (or apply) scaling by sqrt(d_model).
-    # Typically, if MaxText multiplied the embedding by sqrt(d_emb), we must now
-    # *divide* to get the original HF scale. Or if HF expects them scaled, we do the opposite.
-    # Let’s assume HF wants them smaller, so do: embedding /= sqrt(d_emb).
-    embedding /= np.sqrt(base_emb_dim)
+    embedding = np.array(raw_embed, copy=True, dtype=np.float32)[:256000, :]
 
     hf_model_params["model.embed_tokens.weight"] = torch.tensor(
-        embedding, dtype=torch.bfloat16
+        embedding, dtype=torch.float32
     )
 
     # ------------------------------------------------------------------------
@@ -222,7 +210,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                     .reshape(base_emb_dim, base_num_query_heads * head_dim)
                     .T
                 ),
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             )
         )
 
@@ -239,7 +227,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                     .reshape(base_emb_dim, base_num_kv_heads * head_dim)
                     .T
                 ),
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             )
         )
 
@@ -253,7 +241,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                     .reshape(base_emb_dim, base_num_kv_heads * head_dim)
                     .T
                 ),
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             )
         )
 
@@ -267,7 +255,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                     .reshape(base_num_query_heads * head_dim, base_emb_dim)
                     .T
                 ),
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             )
         )
 
@@ -281,7 +269,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                         "wi_0"
                     ]["kernel"][:, maxtext_layer_idx, :].T
                 ),
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             )
         )
 
@@ -292,7 +280,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                         "wi_1"
                     ]["kernel"][:, maxtext_layer_idx, :].T
                 ),
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             )
         )
 
@@ -303,7 +291,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                         "kernel"
                     ][:, maxtext_layer_idx, :].T
                 ),
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             )
         )
 
@@ -319,7 +307,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                         ]["scale"][:, maxtext_layer_idx]
                     ).reshape(base_emb_dim)
                 ),
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             )
         )
 
@@ -333,7 +321,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                     ]["scale"][:, maxtext_layer_idx]
                 ).reshape(base_emb_dim)
             ),
-            dtype=torch.bfloat16,
+            dtype=torch.float32,
         )
 
         hf_model_params[
@@ -346,7 +334,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                     ]["scale"][:, maxtext_layer_idx]
                 ).reshape(base_emb_dim)
             ),
-            dtype=torch.bfloat16,
+            dtype=torch.float32,
         )
 
         hf_model_params[
@@ -359,7 +347,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
                     ]["scale"][:, maxtext_layer_idx]
                 ).reshape(base_emb_dim)
             ),
-            dtype=torch.bfloat16,
+            dtype=torch.float32,
         )
 
     # ------------------------------------------------------------------------
@@ -373,7 +361,7 @@ def convert_gemma2_state_to_hf(training_state, model_size):
     )
     hf_model_params["model.norm.weight"] = torch.tensor(
         scale_rmsnorm_layer_for_hf(norm_arr),
-        dtype=torch.bfloat16,
+        dtype=torch.float32,
     )
 
     return hf_model_params
