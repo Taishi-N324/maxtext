@@ -83,7 +83,6 @@ class Embed(nn.Module):
     else:
       output = jnp.asarray(self.embedding, self.dtype)[inputs]
     
-    output *= jnp.sqrt(self.features).astype(output.dtype)
     output = nn.with_logical_constraint(
         output, ("activation_embed_and_logits_batch", "activation_length", "activation_embed")
     )

@@ -102,6 +102,7 @@ def main(raw_args=None) -> None:
         },
         "token_embedder": {
             "embedding": params["transformer"]["embedder"]["input_embedding"]
+            * jnp.sqrt(embed_dim)
         },
     }
     self_attention_local = dict(
