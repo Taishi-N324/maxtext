@@ -162,8 +162,11 @@ def convert_gemma2_state_to_hf(training_state, model_size):
     # ------------------------------------------------------------------------
     # Typically padded from [256000, d_emb] up to [256128, d_emb].
     raw_embed = training_state.params["params"]["token_embedder"]["embedding"]
-    embedding = np.array(raw_embed, copy=True, dtype=np.float32)[:256000, :]
+    import jax.numpy as jnp
 
+    embedding = np.array(raw_embed, copy=True, dtype=np.float32)[:256000, :]
+    normalizer = jnp.sqrt(base_emb_dim).astype(jnp.bfloat16)
+    embedding = embedding / normalizer
     hf_model_params["model.embed_tokens.weight"] = torch.tensor(
         embedding, dtype=torch.float32
     )
