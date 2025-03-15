@@ -38,3 +38,4 @@ google-jetstream
 jsonlines
 pathwaysutils@git+https://github.com/google/pathways-utils.git
 omegaconf
+wandb

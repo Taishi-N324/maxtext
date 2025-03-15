@@ -50,6 +50,7 @@ import tensorflow as tf
 
 from metric_logger import MetricLogger
 from utils import gcs_utils
+import wandb
 
 from vertex_tensorboard import VertexTensorboardManager
 # Placeholder: internal
@@ -80,6 +81,26 @@ Transformer = models.Transformer
 EPS = 1e-8
 _DEFAULT_OCDBT_TARGET_DATA_FILE_SIZE = 2 * 1024**3
 
+def initialize_wandb(config):
+    """Initialize Weights & Biases logging."""
+    if jax.process_index() == 0:
+        wandb.init(
+            entity="prj-jalm", project="gemma_tpu", name=config.run_name, config=vars(config)
+        )
+
+def log_metrics_to_wandb(metrics, step, is_training=True):
+    """Log metrics to Weights & Biases."""
+    if jax.process_index() == 0:
+        prefix = "" if is_training else "eval/"
+        wandb_metrics = {}
+        for key, value in metrics.get("scalar", {}).items():
+            wandb_metrics[f"{prefix}{key}"] = value
+
+        for key, value_dict in metrics.get("scalars", {}).items():
+            for sub_key, sub_value in value_dict.items():
+                wandb_metrics[f"{prefix}{key}/{sub_key}"] = sub_value
+
+        wandb.log(wandb_metrics, step=step)
 
 def validate_train_config(config):
   """Validates the configuration is set correctly for train.py"""
@@ -120,6 +141,80 @@ def record_scalar_metrics(metrics, step_time_delta, per_device_tflops, lr, per_d
   metrics["scalar"].update({"perf/per_device_tokens": per_device_tokens})
   metrics["scalar"].update({"perf/per_device_tokens_per_sec": per_device_tokens / step_time_delta.total_seconds()})
   metrics["scalar"].update({"learning/current_learning_rate": lr})
+
+
+_buffered_step = None
+_buffered_metrics = None
+
+
+def write_metrics(writer, local_metrics_file, running_gcs_metrics, metrics, step, config, is_training=True):
+  """Entry point for all metrics writing in Train's Main.
+  TODO: would be better as a Class in the future (that initialized all state!)
+
+  To avoid introducing an unnecessary dependency, we "double buffer" -- we hold
+  onto the last metrics and step and only publish when we receive a new metrics and step.
+  The logic is that this ensures that Jax is able to queues train_steps and we
+  don't block when turning "lazy" Jax arrays into real Python numbers.
+  """
+  metrics_to_write, steps_to_write = None, None
+  if is_training:
+    global _buffered_step, _buffered_metrics
+    if _buffered_metrics is not None:
+      if _buffered_step is None:
+        raise ValueError(f"When writing metrics, {_buffered_step=} was none")
+      metrics_to_write = _buffered_metrics
+      steps_to_write = _buffered_step
+  else:
+    metrics_to_write = metrics
+    steps_to_write = step
+
+  if metrics_to_write:
+    write_metrics_to_tensorboard(writer, metrics_to_write, steps_to_write, config, is_training)
+    log_metrics_to_wandb(metrics_to_write, steps_to_write, is_training)
+
+    if config.metrics_file:
+      max_utils.write_metrics_locally(metrics_to_write, steps_to_write, config, local_metrics_file, is_training)
+
+    if config.gcs_metrics and jax.process_index() == 0:
+      running_gcs_metrics = max_utils.write_metrics_for_gcs(
+          metrics_to_write, steps_to_write, config, running_gcs_metrics, is_training
+      )
+
+  if is_training:
+    _buffered_step = step
+    _buffered_metrics = metrics
+
+
+def write_metrics_to_tensorboard(writer, metrics, step, config, is_training=True):
+  """Writes metrics to tensorboard"""
+  with jax.spmd_mode("allow_all"):
+    if jax.process_index() == 0:
+      for metric_name in metrics.get("scalar", []):
+        writer.add_scalar(metric_name, np.array(metrics["scalar"][metric_name]), step)
+      for metric_name in metrics.get("scalars", []):
+        writer.add_scalars(metric_name, metrics["scalars"][metric_name], step)
+
+    if is_training:
+      full_log = step % config.log_period == 0
+
+      max_logging.log(
+          f"completed step: {step}, seconds: {metrics['scalar']['perf/step_time_seconds']:.3f}, "
+          f"TFLOP/s/device: {metrics['scalar']['perf/per_device_tflops_per_sec']:.3f}, "
+          f"Tokens/s/device: {metrics['scalar']['perf/per_device_tokens_per_sec']:.3f}, "
+          f"total_weights: {metrics['scalar']['learning/total_weights']}, "
+          f"loss: {metrics['scalar']['learning/loss']:.3f}"
+      )
+
+      if full_log and jax.process_index() == 0:
+        max_logging.log(f"To see full metrics 'tensorboard --logdir={config.tensorboard_dir}'")
+        writer.flush()
+
+
+def clear_buffered_metrics():
+  global _buffered_step
+  global _buffered_metrics
+  _buffered_step = None
+  _buffered_metrics = None
 
 
 def save_checkpoint(
@@ -931,6 +1026,7 @@ def main(argv: Sequence[str]) -> None:
   config = pyconfig.initialize(argv)
   max_utils.print_system_information()
   validate_train_config(config)
+  initialize_wandb(config)
   os.environ["TFDS_DATA_DIR"] = config.dataset_path
   vertex_tensorboard_manager = VertexTensorboardManager()
   if config.use_vertex_tensorboard or os.environ.get("UPLOAD_DATA_TO_TENSORBOARD"):
@@ -964,6 +1060,8 @@ def main(argv: Sequence[str]) -> None:
   diagnostic_config = diagnostic_configuration.DiagnosticConfig(debug_config)
   with diagnostic.diagnose(diagnostic_config):
     train_loop(config)
+  if jax.process_index() == 0:
+    wandb.finish()
 
 
 if __name__ == "__main__":
