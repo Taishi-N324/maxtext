@@ -34,13 +34,7 @@ def get_datasets(data_file_pattern):
   # data_files = glob.glob(str(Path(data_file_pattern).expanduser().resolve()))
   data_files = glob.glob(str(Path(data_file_pattern).expanduser()), recursive=True)
   # Allow to have extra to avoid StopIteration
-  data_files = data_files * 2
-  data_files.append("/mnt/filestore/gemma_tpu_grain/Swallow_v2/edu/filter-v2-gemma-top10/dump_0.arecord")
-  data_files.append("/mnt/filestore/gemma_tpu_grain/Swallow_v2/edu/filter-v2-gemma-top10/dump_1.arecord")
-  data_files.append("/mnt/filestore/gemma_tpu_grain/Swallow_v2/edu/filter-v2-gemma-top10/dump_2.arecord")
-  data_files.append("/mnt/filestore/gemma_tpu_grain/Swallow_v2/edu/filter-v2-gemma-top10/dump_3.arecord")
-  data_files.append("/mnt/filestore/gemma_tpu_grain/Swallow_v2/edu/filter-v2-gemma-top10/dump_4.arecord")
-  data_files.append("/mnt/filestore/gemma_tpu_grain/finemath/finemath-4plus-jsonl/finemath-4plus-merged.arecord")
+  data_files = data_files * 4
   for f in data_files:
     print(f"File: {f}")
   dataset = grain.ArrayRecordDataSource(data_files)
