@@ -935,7 +935,7 @@ def train_loop(config, state=None):
         sys.exit()
 
     metric_logger.write_metrics(running_gcs_metrics, metrics, step)
-
+    log_metrics_to_wandb(metrics, step, is_training=True)
     if config.dump_hlo and step == (config.dump_step if config.dump_step >= 0 else start_step):
       jax.block_until_ready(state)  # Ensure compilation has finished.
       gcs_utils.upload_dump(
