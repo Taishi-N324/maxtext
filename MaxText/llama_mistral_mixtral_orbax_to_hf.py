@@ -117,6 +117,18 @@ def load_hf_model(model_size):
     elif model_size == "gemma2-27b":
         config = AutoConfig.from_pretrained("google/gemma-2-27b")
         model = AutoModelForCausalLM.from_config(config)
+    elif model_size == "gemma3-4b":
+        model = AutoModelForCausalLM.from_pretrained(
+            "google/gemma-3-4b-it", device_map="auto"
+        )
+    elif model_size == "gemma3-12b":
+        model = AutoModelForCausalLM.from_pretrained(
+            "google/gemma-3-12b-pt", device_map="auto"
+        )
+    elif model_size == "gemma3-27b":
+        model = AutoModelForCausalLM.from_pretrained(
+            "google/gemma-3-27b-pt", device_map="auto"
+        )
     else:
         raise NotImplementedError
     return model
@@ -141,6 +153,239 @@ def load_model_state(config):
     max_logging.log(f"Read training checkpoint from: {config.load_full_state_path}")
     training_state, _ = _read_train_checkpoint(config, checkpoint_manager, mesh)
     return training_state
+
+
+def convert_gemma3_state_to_hf(training_state, model_size):
+    """
+    Port the parameters from the Orbax training_state into the hf_model with correct layer mapping
+    """
+    model_params = llama_or_mistral_ckpt.MODEL_PARAMS_DICT[model_size]
+    base_num_decoder_layers = model_params["num_layers"]
+    base_num_query_heads = model_params["num_heads"]
+    head_dim = model_params["dims_per_head"]
+    base_num_kv_heads = model_params["num_kv_heads"]
+    base_emb_dim = model_params["base_emb_dim"]
+
+    hf_model_params = {}
+
+    # ------------------------------------------------------------------------
+    # 1) Convert token embedding
+    # ------------------------------------------------------------------------
+    raw_embed = training_state.params["params"]["token_embedder"]["embedding"]
+    import jax.numpy as jnp
+
+    embedding = np.array(raw_embed, copy=True, dtype=np.float32)[:262144, :]
+    normalizer = jnp.sqrt(base_emb_dim).astype(jnp.bfloat16)
+    embedding = embedding / normalizer
+    hf_model_params["model.embed_tokens.weight"] = torch.tensor(
+        embedding, dtype=torch.float32
+    )
+
+    # ------------------------------------------------------------------------
+    # 2) Map each decoder layer
+    # ------------------------------------------------------------------------
+    for hf_layer_idx in tqdm(
+        range(base_num_decoder_layers), desc="Porting parameters layerwise"
+    ):
+        print(f"Converting weights for layer {hf_layer_idx}")
+
+        # --------------------------------------------------------------------
+        # Attention mapping
+        # --------------------------------------------------------------------
+        hf_model_params[f"model.layers.{hf_layer_idx}.self_attn.q_proj.weight"] = (
+            torch.tensor(
+                np.asarray(
+                    unpermute_from_match_maxtext_rope(
+                        training_state.params["params"]["decoder"]["layers"][
+                            "self_attention"
+                        ]["query"]["kernel"][:, hf_layer_idx, :, :],
+                        model_size,
+                    )
+                    .reshape(base_emb_dim, base_num_query_heads * head_dim)
+                    .T
+                ),
+                dtype=torch.float32,
+            )
+        )
+
+        # K-proj
+        hf_model_params[f"model.layers.{hf_layer_idx}.self_attn.k_proj.weight"] = (
+            torch.tensor(
+                np.asarray(
+                    unpermute_from_match_maxtext_rope(
+                        training_state.params["params"]["decoder"]["layers"][
+                            "self_attention"
+                        ]["key"]["kernel"][:, hf_layer_idx, :, :],
+                        model_size,
+                    )
+                    .reshape(base_emb_dim, base_num_kv_heads * head_dim)
+                    .T
+                ),
+                dtype=torch.float32,
+            )
+        )
+
+        # V-proj
+        hf_model_params[f"model.layers.{hf_layer_idx}.self_attn.v_proj.weight"] = (
+            torch.tensor(
+                np.asarray(
+                    training_state.params["params"]["decoder"]["layers"][
+                        "self_attention"
+                    ]["value"]["kernel"][:, hf_layer_idx, :, :]
+                    .reshape(base_emb_dim, base_num_kv_heads * head_dim)
+                    .T
+                ),
+                dtype=torch.float32,
+            )
+        )
+
+        # Out-proj
+        hf_model_params[f"model.layers.{hf_layer_idx}.self_attn.o_proj.weight"] = (
+            torch.tensor(
+                np.asarray(
+                    training_state.params["params"]["decoder"]["layers"][
+                        "self_attention"
+                    ]["out"]["kernel"][:, hf_layer_idx, :, :]
+                    .reshape(base_num_query_heads * head_dim, base_emb_dim)
+                    .T
+                ),
+                dtype=torch.float32,
+            )
+        )
+
+        # Query-norm and Key-norm (Added for Gemma 3)
+        hf_model_params[f"model.layers.{hf_layer_idx}.self_attn.q_norm.weight"] = (
+            torch.tensor(
+                np.asarray(
+                    scale_rmsnorm_layer_for_hf(
+                        training_state.params["params"]["decoder"]["layers"][
+                            "self_attention"
+                        ]["query_norm"]["scale"][:, hf_layer_idx]
+                    )
+                ),
+                dtype=torch.float32,
+            )
+        )
+
+        hf_model_params[f"model.layers.{hf_layer_idx}.self_attn.k_norm.weight"] = (
+            torch.tensor(
+                np.asarray(
+                    scale_rmsnorm_layer_for_hf(
+                        training_state.params["params"]["decoder"]["layers"][
+                            "self_attention"
+                        ]["key_norm"]["scale"][:, hf_layer_idx]
+                    )
+                ),
+                dtype=torch.float32,
+            )
+        )
+
+        # --------------------------------------------------------------------
+        # MLP mapping
+        # --------------------------------------------------------------------
+        hf_model_params[f"model.layers.{hf_layer_idx}.mlp.gate_proj.weight"] = (
+            torch.tensor(
+                np.asarray(
+                    training_state.params["params"]["decoder"]["layers"]["mlp"]["wi_0"][
+                        "kernel"
+                    ][:, hf_layer_idx, :].T
+                ),
+                dtype=torch.float32,
+            )
+        )
+
+        hf_model_params[f"model.layers.{hf_layer_idx}.mlp.up_proj.weight"] = (
+            torch.tensor(
+                np.asarray(
+                    training_state.params["params"]["decoder"]["layers"]["mlp"]["wi_1"][
+                        "kernel"
+                    ][:, hf_layer_idx, :].T
+                ),
+                dtype=torch.float32,
+            )
+        )
+
+        hf_model_params[f"model.layers.{hf_layer_idx}.mlp.down_proj.weight"] = (
+            torch.tensor(
+                np.asarray(
+                    training_state.params["params"]["decoder"]["layers"]["mlp"]["wo"][
+                        "kernel"
+                    ][:, hf_layer_idx, :].T
+                ),
+                dtype=torch.float32,
+            )
+        )
+
+        # --------------------------------------------------------------------
+        # Norm layers (Gemma2 uses RMSNorm, MaxText's scale param => scale-1.0)
+        # --------------------------------------------------------------------
+        hf_model_params[f"model.layers.{hf_layer_idx}.input_layernorm.weight"] = (
+            torch.tensor(
+                np.asarray(
+                    scale_rmsnorm_layer_for_hf(
+                        training_state.params["params"]["decoder"]["layers"][
+                            "pre_self_attention_norm"
+                        ]["scale"][:, hf_layer_idx]
+                    ).reshape(base_emb_dim)
+                ),
+                dtype=torch.float32,
+            )
+        )
+
+        hf_model_params[
+            f"model.layers.{hf_layer_idx}.post_attention_layernorm.weight"
+        ] = torch.tensor(
+            np.asarray(
+                scale_rmsnorm_layer_for_hf(
+                    training_state.params["params"]["decoder"]["layers"][
+                        "post_self_attention_norm"
+                    ]["scale"][:, hf_layer_idx]
+                ).reshape(base_emb_dim)
+            ),
+            dtype=torch.float32,
+        )
+
+        hf_model_params[
+            f"model.layers.{hf_layer_idx}.pre_feedforward_layernorm.weight"
+        ] = torch.tensor(
+            np.asarray(
+                scale_rmsnorm_layer_for_hf(
+                    training_state.params["params"]["decoder"]["layers"][
+                        "pre_ffw_norm"
+                    ]["scale"][:, hf_layer_idx]
+                ).reshape(base_emb_dim)
+            ),
+            dtype=torch.float32,
+        )
+
+        hf_model_params[
+            f"model.layers.{hf_layer_idx}.post_feedforward_layernorm.weight"
+        ] = torch.tensor(
+            np.asarray(
+                scale_rmsnorm_layer_for_hf(
+                    training_state.params["params"]["decoder"]["layers"][
+                        "post_ffw_norm"
+                    ]["scale"][:, hf_layer_idx]
+                ).reshape(base_emb_dim)
+            ),
+            dtype=torch.float32,
+        )
+
+    # ------------------------------------------------------------------------
+    # 3) final norm
+    # ------------------------------------------------------------------------
+    # Final RMSNorm
+    norm_arr = np.asarray(
+        training_state.params["params"]["decoder"]["decoder_norm"]["scale"].reshape(
+            base_emb_dim
+        )
+    )
+    hf_model_params["model.norm.weight"] = torch.tensor(
+        scale_rmsnorm_layer_for_hf(norm_arr),
+        dtype=torch.float32,
+    )
+
+    return hf_model_params
 
 
 def convert_gemma2_state_to_hf(training_state, model_size):
@@ -379,6 +624,8 @@ def convert_state_to_hf(training_state, model_size):
 
     if model_size.startswith("gemma2-"):
         return convert_gemma2_state_to_hf(training_state, model_size)
+    elif model_size.startswith("gemma3-"):
+        return convert_gemma3_state_to_hf(training_state, model_size)
     # Load the model specific parameters
     model_params = llama_or_mistral_ckpt.MODEL_PARAMS_DICT[model_size]
     base_num_decoder_layers = model_params["num_layers"]
@@ -597,11 +844,11 @@ def convert_orbax_hf(hf_model_path, config):
 
 
 def main(argv: Sequence[str]):
-    pyconfig.initialize(argv[:-1])
+    config = pyconfig.initialize(argv[:-1])
     hf_model_path = argv[-1].split("=")[1]
     print(f"Will save converted HuggingFace checkpoint to path = {hf_model_path}")
 
-    convert_orbax_hf(hf_model_path, pyconfig.config)
+    convert_orbax_hf(hf_model_path, config)
 
 
 if __name__ == "__main__":
