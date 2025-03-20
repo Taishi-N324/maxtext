@@ -45,6 +45,11 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --zone=${ZONE} \
     --worker=all \
+    --command="pip install orbax-checkpoint==0.11.6"
+
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
     --command="echo 'machine api.wandb.ai\
   login user\
     password ${WANDB_PASSWORD}' > ~/.netrc"
