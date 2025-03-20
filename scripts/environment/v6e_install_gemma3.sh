@@ -30,7 +30,7 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --zone=${ZONE} \
     --worker=all \
-    --command="git clone https://github.com/Taishi-N324/maxtext.git && cd maxtext && git switch swallow"
+    --command="git clone https://github.com/Taishi-N324/maxtext.git && cd maxtext && git switch gemma3-swallow"
 
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --zone=${ZONE} \
@@ -47,4 +47,4 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --worker=all \
     --command="echo 'machine api.wandb.ai\
   login user\
-  password ${WANDB_PASSWORD}' > ~/.netrc"
+    password ${WANDB_PASSWORD}' > ~/.netrc"

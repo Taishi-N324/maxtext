@@ -162,6 +162,29 @@ python MaxText/convert_gemma2_chkpt.py \
   --model_size 27b
 ```
 
+### Gemma3
+
+```bash
+curl -L -u $KAGGLE_USERNAME:$KAGGLE_KEY   -o ./model.tar.gz   https://www.kaggle.com/api/v1/models/google/gemma-3/flax/gemma3-1b-it/1/download
+curl -L -u $KAGGLE_USERNAME:$KAGGLE_KEY   -o ./model.tar.gz   https://www.kaggle.com/api/v1/models/google/gemma-3/flax/gemma3-1b/1/download
+curl -L -u $KAGGLE_USERNAME:$KAGGLE_KEY   -o ./model.tar.gz   https://www.kaggle.com/api/v1/models/google/gemma-3/flax/gemma3-4b-it/1/download
+curl -L -u $KAGGLE_USERNAME:$KAGGLE_KEY   -o ./model.tar.gz   https://www.kaggle.com/api/v1/models/google/gemma-3/flax/gemma3-4b/1/download
+```
+
+```bash
+python MaxText/convert_gemma3_chkpt.py \
+  --base_model_path /mnt/filestore/checkpoints/gemma3-4b \
+  --maxtext_model_path /mnt/filestore/checkpoints_maxtext/gemma3-4b \
+  --model_size 4b
+```
+
+```bash
+python MaxText/convert_gemma3_chkpt.py \
+  --base_model_path /mnt/filestore/checkpoints/gemma3-12b \
+  --maxtext_model_path /mnt/filestore/checkpoints_maxtext/gemma3-12b \
+  --model_size 12b
+```
+
 ### HF形式への checkpoint convert
 
 27Bのconvertに必要なCPUメモリが ~524GBなので、v6e-4での作業をお勧めします
