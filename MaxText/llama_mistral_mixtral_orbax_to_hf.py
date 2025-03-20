@@ -33,23 +33,25 @@ the GCS bucket as a local path using `setup_gcsfuse.sh`, but remember to mount a
 """
 
 from typing import Sequence
-import torch
-from tqdm import tqdm
-from absl import app
+
 import numpy as np
-import pyconfig
-import max_utils
+import torch
+from absl import app
 from jax.sharding import Mesh
-import max_logging
-import checkpointing
-from generate_param_only_checkpoint import _read_train_checkpoint
-import llama_or_mistral_ckpt
+from tqdm import tqdm
 from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
     LlamaForCausalLM,
     MistralForCausalLM,
-    AutoModelForCausalLM,
-    AutoConfig,
 )
+
+import checkpointing
+import llama_or_mistral_ckpt
+import max_logging
+import max_utils
+import pyconfig
+from generate_param_only_checkpoint import _read_train_checkpoint
 
 
 def unpermute_from_match_maxtext_rope(arr, model_size):
@@ -61,6 +63,28 @@ def unpermute_from_match_maxtext_rope(arr, model_size):
     evens = arr[..., ::2]
     odds = arr[..., 1::2]
     return jax.numpy.concatenate((evens, odds), axis=arr.ndim - 1)
+
+
+def pad_embeddings(raw_embed, base_emb_dim, target_size=262208):
+    # To align the sizes for mapping, call and evaluate using Gemma3ForConditionalGeneration
+    import jax.numpy as jnp
+    import torch
+
+    normalizer = jnp.sqrt(base_emb_dim).astype(jnp.bfloat16)
+    embedding = raw_embed / normalizer
+
+    embedding_np = np.array(embedding, dtype=np.float32)
+
+    current_size = embedding_np.shape[0]
+    if current_size < target_size:
+        padding = np.zeros(
+            (target_size - current_size, embedding_np.shape[1]), dtype=np.float32
+        )
+        embedding_np = np.vstack([embedding_np, padding])
+    elif current_size > target_size:
+        embedding_np = embedding_np[:target_size]
+
+    return torch.tensor(embedding_np, dtype=torch.float32)
 
 
 def reverse_scale(arr, head_dim, model_size):
@@ -172,13 +196,8 @@ def convert_gemma3_state_to_hf(training_state, model_size):
     # 1) Convert token embedding
     # ------------------------------------------------------------------------
     raw_embed = training_state.params["params"]["token_embedder"]["embedding"]
-    import jax.numpy as jnp
-
-    embedding = np.array(raw_embed, copy=True, dtype=np.float32)[:262144, :]
-    normalizer = jnp.sqrt(base_emb_dim).astype(jnp.bfloat16)
-    embedding = embedding / normalizer
-    hf_model_params["model.embed_tokens.weight"] = torch.tensor(
-        embedding, dtype=torch.float32
+    hf_model_params["model.embed_tokens.weight"] = pad_embeddings(
+        raw_embed, base_emb_dim
     )
 
     # ------------------------------------------------------------------------
