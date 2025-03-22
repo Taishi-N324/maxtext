@@ -38,7 +38,7 @@ python3 -u MaxText/train.py MaxText/configs/base.yml \
     learning_rate=1.5e-5 \
     cosine_learning_rate_final_fraction=0.1 \
     warmup_steps_fraction=0.04 \
-    checkpoint_period=500 \
+    checkpoint_period=250 \
     enable_checkpointing=true \
     ici_fsdp_transpose_parallelism=128 \
     ici_fsdp_parallelism=-1 \
