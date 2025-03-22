@@ -170,7 +170,7 @@ def main(raw_args=None) -> None:
 
   def astype_fn(x):
     if isinstance(x, jnp.ndarray):
-      return x.astype(jnp.bfloat16)
+      return x.astype(jnp.float32)
     else:
       return x
 
