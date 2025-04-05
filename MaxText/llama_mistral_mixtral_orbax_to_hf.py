@@ -74,16 +74,6 @@ def pad_embeddings(raw_embed, base_emb_dim, target_size=262208):
     embedding = raw_embed / normalizer
 
     embedding_np = np.array(embedding, dtype=np.float32)
-
-    current_size = embedding_np.shape[0]
-    if current_size < target_size:
-        padding = np.zeros(
-            (target_size - current_size, embedding_np.shape[1]), dtype=np.float32
-        )
-        embedding_np = np.vstack([embedding_np, padding])
-    elif current_size > target_size:
-        embedding_np = embedding_np[:target_size]
-
     return torch.tensor(embedding_np, dtype=torch.float32)
 
 
