@@ -85,13 +85,14 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \\
   password ${WANDB_PASSWORD}' > ~/.netrc"
 ```
 
-
+```
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --zone=${ZONE} \
     --worker=all \
     --command="echo 'machine api.wandb.ai
   login user
   password ${WANDB_PASSWORD}' > ~/.netrc"
+```
 
 `scripts/environment/v6e_install.sh`　を実行することでここまでの環境構築を実行できます
 
