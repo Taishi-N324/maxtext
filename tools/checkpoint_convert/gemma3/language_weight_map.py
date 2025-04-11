@@ -11,6 +11,8 @@ def copy_weights_and_save(
 ):
     """
     Copy weights from a source model to a target model structure and save the result.
+    Special handling for embedding layer to only replace first 262,144 entries.
+    Skip vision tower and multi-modal projector parameters to maintain original vision capabilities.
 
     Args:
         source_model_path: Path to the source model (e.g., converted from MaxText)
@@ -41,10 +43,55 @@ def copy_weights_and_save(
     missing_params = []
     copied_params = []
     skipped_params = []
+    partially_copied_params = []
+    vision_params = []
 
     # Get all named parameters from the target model
     target_params = dict(target_model.named_parameters())
     for name, param in target_params.items():
+        # Skip vision tower and multi-modal projector parameters completely
+        if name.startswith("vision_tower") or name.startswith("multi_modal_projector"):
+            vision_params.append(
+                (
+                    name,
+                    "Vision/multimodal component - intentionally preserved",
+                    str(tuple(param.shape)),
+                )
+            )
+            continue
+
+        # Special handling for embedding layer
+        if name == "language_model.model.embed_tokens.weight":
+            if name in mapping:
+                source_name = mapping[name]
+                if source_name in source_model.state_dict():
+                    source_param = source_model.state_dict()[source_name]
+
+                    # Check if this is the embedding layer with size mismatch
+                    if param.shape[0] == 262208 and source_param.shape[0] == 262144:
+                        print(f"Special handling for embedding layer: {name}")
+                        print(
+                            f"  Target shape: {param.shape}, Source shape: {source_param.shape}"
+                        )
+
+                        # Copy only the first 262,144 entries and keep the rest
+                        with torch.no_grad():
+                            # Copy the first 262,144 rows
+                            param[:262144, :].copy_(source_param)
+                            # The remaining rows (262144 to 262208) keep their original values
+
+                        partially_copied_params.append(
+                            (
+                                name,
+                                source_name,
+                                f"Partial copy: first {source_param.shape[0]} of {param.shape[0]} rows",
+                            )
+                        )
+                        continue
+                    else:
+                        exit()
+
+        # Normal parameter handling for all other parameters
         if name in mapping:
             source_name = mapping[name]
             # Get the source parameter through the model's state_dict
@@ -74,9 +121,11 @@ def copy_weights_and_save(
             missing_params.append((name, "No mapping found", ""))
 
     # Print summary
-    print(f"\nCopied {len(copied_params)} parameters")
+    print(f"\nCopied {len(copied_params)} parameters completely")
+    print(f"Partially copied {len(partially_copied_params)} parameters")
     print(f"Skipped {len(skipped_params)} parameters due to shape mismatches")
     print(f"Missing {len(missing_params)} parameters")
+    print(f"Preserved {len(vision_params)} vision parameters")
 
     # Show sample of copied parameters
     if copied_params:
@@ -86,12 +135,29 @@ def copy_weights_and_save(
         ]:  # Print just 10 examples
             print(f"  {target_name} ({shape}) <- {source_name}")
 
+    # Show partially copied parameters
+    if partially_copied_params:
+        print("\nPartially copied parameters:")
+        for target_name, source_name, details in partially_copied_params:
+            print(f"  {target_name} <- {source_name} ({details})")
+
+    # Show sample of vision parameters
+    if vision_params:
+        print("\nSample of preserved vision parameters:")
+        sample_size = min(10, len(vision_params))
+        for target_name, reason, shape in vision_params[:sample_size]:
+            print(f"  {target_name} ({shape}) - {reason}")
+
     # Save the mapping to a file if requested
     if save_mapping:
         mapping_data = {
             "copied_params": [(t, s, str(shape)) for t, s, shape in copied_params],
+            "partially_copied_params": [
+                (t, s, d) for t, s, d in partially_copied_params
+            ],
             "skipped_params": [(t, s, r) for t, s, r in skipped_params],
             "missing_params": [(t, s, r) for t, s, r in missing_params],
+            "vision_params": [(t, r, s) for t, r, s in vision_params],
         }
 
     # Save the updated model
@@ -104,7 +170,10 @@ def copy_weights_and_save(
     print(f"\nSummary:")
     print(f"Total parameters: {total_params}")
     print(
-        f"Successfully copied: {len(copied_params)} ({len(copied_params)/total_params*100:.1f}%)"
+        f"Successfully copied completely: {len(copied_params)} ({len(copied_params)/total_params*100:.1f}%)"
+    )
+    print(
+        f"Partially copied: {len(partially_copied_params)} ({len(partially_copied_params)/total_params*100:.1f}%)"
     )
     print(
         f"Skipped: {len(skipped_params)} ({len(skipped_params)/total_params*100:.1f}%)"
@@ -112,11 +181,16 @@ def copy_weights_and_save(
     print(
         f"Missing: {len(missing_params)} ({len(missing_params)/total_params*100:.1f}%)"
     )
+    print(
+        f"Preserved vision: {len(vision_params)} ({len(vision_params)/total_params*100:.1f}%)"
+    )
 
     return target_model, {
         "copied": copied_params,
+        "partially_copied": partially_copied_params,
         "skipped": skipped_params,
         "missing": missing_params,
+        "vision": vision_params,
     }
 
 
@@ -124,6 +198,7 @@ def create_parameter_mapping(target_model, source_model):
     """
     Create a mapping from target model parameter names to source model parameter names.
     This handles the difference between Gemma3ForConditionalGeneration and standard HF models.
+    Vision tower and multi-modal projector parameters are intentionally excluded from mapping.
 
     Args:
         target_model: The model to copy weights to
@@ -151,8 +226,24 @@ def create_parameter_mapping(target_model, source_model):
     print("\nSample source parameter names:")
     print("\n".join(list(source_params)[:5]))
 
+    # Count vision and multi-modal projector parameters
+    vision_params = [
+        p
+        for p in target_params
+        if p.startswith("vision_tower") or p.startswith("multi_modal_projector")
+    ]
+    print(
+        f"\nFound {len(vision_params)} vision tower and multi-modal projector parameters (will be preserved)"
+    )
+
     # For each target parameter, try to find a corresponding source parameter
     for param_name in target_params:
+        # Skip vision tower and multi-modal projector parameters completely - don't try to map them
+        if param_name.startswith("vision_tower") or param_name.startswith(
+            "multi_modal_projector"
+        ):
+            continue
+
         # Extract the non-prefixed part if target has language_model prefix
         param_without_prefix = param_name
         if param_name.startswith("language_model."):
@@ -201,9 +292,16 @@ def create_parameter_mapping(target_model, source_model):
                 mapping[param_name] = source_name
                 break
 
+    # Count target parameters that are not vision-related or multi-modal
+    non_vision_params = [
+        p
+        for p in target_params
+        if not (p.startswith("vision_tower") or p.startswith("multi_modal_projector"))
+    ]
+
     # Print mapping statistics
     print(
-        f"\nCreated mapping for {len(mapping)} out of {len(target_params)} parameters"
+        f"\nCreated mapping for {len(mapping)} out of {len(non_vision_params)} non-vision parameters"
     )
     print(f"Source model has {len(source_params)} parameters")
 
@@ -215,7 +313,7 @@ def create_parameter_mapping(target_model, source_model):
             print(f"  {key} -> {mapping[key]}")
 
     # Print some sample unmapped parameters
-    unmapped = [p for p in target_params if p not in mapping]
+    unmapped = [p for p in non_vision_params if p not in mapping]
     if unmapped:
         print("\nSample of unmapped parameters:")
         for param in unmapped[:10]:

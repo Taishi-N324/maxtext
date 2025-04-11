@@ -176,6 +176,14 @@ MODEL_PARAMS_DICT = {
         "base_mlp_dim": 36864,
         "vocab": 256000,
     },
+    "gemma3-1b": {
+        "num_layers": 26,
+        "num_heads": 4,
+        "num_kv_heads": 1,
+        "dims_per_head": 256,
+        "base_emb_dim": 1152,
+        "base_mlp_dim": 6912,
+    },
     "gemma3-4b": {
         "num_layers": 34,
         "num_heads": 8,

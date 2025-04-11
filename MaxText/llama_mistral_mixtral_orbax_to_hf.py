@@ -131,6 +131,10 @@ def load_hf_model(model_size):
     elif model_size == "gemma2-27b":
         config = AutoConfig.from_pretrained("google/gemma-2-27b")
         model = AutoModelForCausalLM.from_config(config)
+    elif model_size == "gemma3-1b":
+        model = AutoModelForCausalLM.from_pretrained(
+            "google/gemma-3-1b-it", device_map="auto"
+        )
     elif model_size == "gemma3-4b":
         model = AutoModelForCausalLM.from_pretrained(
             "google/gemma-3-4b-it", device_map="auto"
@@ -848,8 +852,13 @@ def convert_orbax_hf(hf_model_path, config):
     hf_model = load_hf_model(config.model_name)
     training_state = load_model_state(config)
     new_hf_model_params = convert_state_to_hf(training_state, config.model_name)
-    print(f"Saving HuggingFace model to path = {hf_model_path}")
-    hf_model.save_pretrained(hf_model_path, state_dict=new_hf_model_params)
+    for key, tensor in new_hf_model_params.items():
+        if tensor.dtype == torch.float32:
+            new_hf_model_params[key] = tensor.to(torch.bfloat16)
+    print(f"Saving HuggingFace model to path = {hf_model_path} in BF16 format")
+    hf_model.save_pretrained(
+        hf_model_path, state_dict=new_hf_model_params, torch_dtype=torch.bfloat16
+    )
 
 
 def main(argv: Sequence[str]):

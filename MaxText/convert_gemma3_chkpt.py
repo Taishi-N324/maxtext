@@ -51,7 +51,7 @@ def main(raw_args=None) -> None:
   parser.add_argument("--maxtext_model_path", type=str, required=True)
   parser.add_argument("--model_size", type=str, required=True)
   args = parser.parse_args(raw_args)
-  if args.model_size not in ("4b", "12b", "27b"):
+  if args.model_size not in ("1b", "4b", "12b", "27b"):
     raise NotImplementedError("only implemented for gemma 3 classes")
 
   print("Loading checkpoint")
