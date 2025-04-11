@@ -39,3 +39,4 @@ google-jetstream@git+https://github.com/AI-Hypercomputer/JetStream.git
 jsonlines
 pathwaysutils@git+https://github.com/google/pathways-utils.git
 omegaconf
+wandb
