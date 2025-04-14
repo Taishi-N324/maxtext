@@ -373,7 +373,7 @@ def main():
 
     # Function to process a single checkpoint
     def process_checkpoint(checkpoint_dir, checkpoint_name):
-        output_path = os.path.join(args.output_dir, f"gemma3_4b_{checkpoint_name}")
+        output_path = os.path.join(args.output_dir, f"{checkpoint_name}")
         os.makedirs(output_path, exist_ok=True)
 
         print(f"=" * 80)
