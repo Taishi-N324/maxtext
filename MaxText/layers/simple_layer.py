@@ -17,8 +17,8 @@ from jax import numpy as jnp
 from flax import linen as nn
 from jax.sharding import Mesh
 from typing import Optional
-from layers import quantizations
-import common_types
+from MaxText.layers import quantizations
+from MaxText import common_types
 
 # pytype: disable=attribute-error
 
@@ -37,7 +37,9 @@ class SimpleDecoderLayer(nn.Module):
         (self.config.emb_dim, self.config.emb_dim),
     )
 
-  def __call__(self, inputs: jnp.ndarray, positions, segmentation, deterministic, model_mode):
+  def __call__(
+      self, inputs: jnp.ndarray, positions, segmentation, deterministic, model_mode, previous_chunk=None, page_state=None
+  ):
     if self.config.scan_layers:
       return inputs @ self.weight_mat.astype(inputs.dtype), None
     else:
@@ -63,7 +65,17 @@ class SimpleMlpDecoderLayer(nn.Module):
         (self.config.mlp_dim, self.config.emb_dim),
     )
 
-  def __call__(self, inputs: jnp.ndarray, positions, segmentation, deterministic, model_mode):
+  def __call__(
+      self,
+      inputs: jnp.ndarray,
+      positions,
+      segmentation,
+      deterministic,
+      model_mode,
+      previous_chunk=None,
+      page_state=None,
+      slot=0,
+  ):
     intermediate = inputs @ self.ff_1.astype(inputs.dtype)
     output = intermediate @ self.ff_2.astype(inputs.dtype)
     if self.config.scan_layers:

@@ -33,23 +33,26 @@ import argparse
 import sys
 import os
 
+from MaxText.globals import PKG_DIR
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 maxtext_parent_dir = os.path.dirname(current_dir)
 sys.path.append(maxtext_parent_dir)
 
-import max_logging
+from MaxText import max_logging
 
 max_logging.log(f"Added parent directory = {maxtext_parent_dir}")
 
-import common_types
+from MaxText import common_types
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pyconfig
+from MaxText import pyconfig
 import jsonlines
-import max_utils
-from layers import models
-from layers import quantizations
+from MaxText import max_utils
+from MaxText import maxtext_utils
+from MaxText.layers import models
+from MaxText.layers import quantizations
 
 import torch
 from transformers import AutoModelForCausalLM
@@ -66,18 +69,18 @@ def get_data(golden_data, golden_data_index, config):
   logits = np.asarray(golden_data[golden_data_index]["logits"], dtype=np.float32)
   max_logging.log(f" prompt=\"{golden_data[golden_data_index]['prompt']}\" raw ids={ids}, logits.shape = {logits.shape}")
 
-  decoder_segment_ids = jax.numpy.zeros(s) + common_types.DECODING_ACTIVE_SEQUENCE_INDICATOR
-  decoder_positions = jnp.stack(
-      [jnp.arange(config.max_target_length, dtype=jnp.int32) for _ in range(config.global_batch_size_to_train_on)]
+  decoder_segment_ids = np.zeros(s) + common_types.DECODING_ACTIVE_SEQUENCE_INDICATOR
+  decoder_positions = np.stack(
+      [np.arange(config.max_target_length, dtype=np.int32) for _ in range(config.global_batch_size_to_train_on)]
   )
 
-  ids = jnp.stack([ids for _ in range(config.global_batch_size_to_train_on)])
+  ids = np.stack([ids for _ in range(config.global_batch_size_to_train_on)])
   max_logging.log(f"ids={ids}, decoder_segment_ids = {decoder_segment_ids}, decoder_positions= {decoder_positions}")
 
   return ids, decoder_segment_ids, decoder_positions, logits
 
 
-def main(config, test_args):
+def main(config, test_args):  # pylint: disable=W0621
   """Test the Whole Model of model_name"""
 
   # initialize the model with weights from reference ckpt
@@ -86,14 +89,14 @@ def main(config, test_args):
   else:  # Initialize MaxText model
     init_rng = jax.random.PRNGKey(config.init_weights_seed)
     init_rng, rng1 = jax.random.split(init_rng)
-    devices_array = max_utils.create_device_mesh(config)
+    devices_array = maxtext_utils.create_device_mesh(config)
     mesh = jax.sharding.Mesh(devices_array, config.mesh_axes)
     quant = quantizations.configure_quantization(config)
     model = models.Transformer(config, mesh=mesh, quant=quant)
-    state, _ = max_utils.setup_decode_state(model, config, rng1, mesh, None)
+    state, _ = maxtext_utils.setup_decode_state(model, config, rng1, mesh, None)
 
   if test_args.golden_logits_path == "":
-    input_golden_data_path = "MaxText/test_assets/golden_data_" + config.model_name + ".jsonl"
+    input_golden_data_path = os.path.join(PKG_DIR, "test_assets", f"golden_data_{config.model_name}.jsonl")
   else:
     input_golden_data_path = test_args.golden_logits_path
   with jsonlines.open(input_golden_data_path, "r") as f:
@@ -118,9 +121,10 @@ def main(config, test_args):
     max_logging.log(f"{golden_logits[2]=}")
     max_logging.log(f"{full_train_logits[0, 2, :]=}")
     token_size = int(test_args.token_size) if test_args.token_size else golden_logits.shape[0]
-    # The ellipsis is used to currently support jax nightly versions newer than 1/9/2025 and stable tests. This can be simplified later
+    # The ellipsis is used to currently support jax nightly versions newer than
+    # 1/9/2025 and stable tests. This can be simplified later
     max_logging.log(
-        f"Max Numerical Difference {np.max(np.subtract(full_train_logits[..., 0, :token_size, :], golden_logits[:token_size, :]))}"
+        f"Max Numerical Difference {np.max(np.subtract(full_train_logits[..., 0, :token_size, :], golden_logits[:token_size, :]))}"  # pylint: disable=C0301
     )
 
     model_probabilities = jax.nn.softmax(full_train_logits[..., 0, :token_size, :], axis=-1)
@@ -133,19 +137,17 @@ def main(config, test_args):
     max_logging.log(f"KL divergence = {kl_div}, max KL divergence = {jax.numpy.max(kl_div)}")
 
     if test_args.max_kl_div is not None:
-      max_logging.log("Checking KL Divergence between train distribution and golden distribution")
-      assert jax.numpy.all(
-          kl_div < test_args.max_kl_div
-      ), f"KL divergence values exceed the specified threshold of {test_args.max_kl_div}. Max divergence: {jax.numpy.max(kl_div)}"
+      max_logging.log("Checking KL Divergence between train distribution and " "golden distribution")
+      assert jax.numpy.all(kl_div < test_args.max_kl_div), f"KL divergence values exceed the specified threshold of {test_args.max_kl_div}. Max divergence: {jax.numpy.max(kl_div)}"  # pylint: disable=C0301
     else:
-      max_logging.log("Checking Numerical Differences between train logits and golden logits")
+      max_logging.log("Checking Numerical Differences between train logits and golden logits")  # pylint: disable=C0301
       assert jax.numpy.allclose(
           full_train_logits[..., 0, :token_size, :],
           golden_logits[:token_size, :],
           rtol=float(test_args.rtol),
           atol=float(test_args.atol),
           equal_nan=False,
-      ), f"Logits do not match closely enough. Required rtol={test_args.rtol}, atol={test_args.atol}."
+      ), f"Logits do not match closely enough. Required rtol={test_args.rtol}, atol={test_args.atol}."  # pylint: disable=C0301
 
 
 if __name__ == "__main__":
@@ -167,6 +169,5 @@ if __name__ == "__main__":
   for arg in to_remove_args:
     model_args = [s for s in model_args if not s.startswith(arg)]
 
-  pyconfig.initialize(model_args)
-  cfg = pyconfig.config
+  cfg = pyconfig.initialize(model_args)
   main(cfg, test_args)

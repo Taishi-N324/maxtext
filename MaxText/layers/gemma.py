@@ -15,16 +15,16 @@ limitations under the License.
 """
 
 from flax import linen as nn
-import common_types
+from MaxText import common_types
 import jax.numpy as jnp
 from jax.ad_checkpoint import checkpoint_name
 
-from layers import normalizations
-from layers import attentions
-from layers import initializers
-from layers import embeddings
-from layers import linears
-from layers import quantizations
+from MaxText.layers import normalizations
+from MaxText.layers import attentions
+from MaxText.layers import initializers
+from MaxText.layers import embeddings
+from MaxText.layers import linears
+from MaxText.layers import quantizations
 
 from typing import Optional
 
@@ -66,6 +66,10 @@ class GemmaDecoderLayer(nn.Module):
       decoder_positions,
       deterministic,
       model_mode,
+      previous_chunk=None,
+      page_manager=None,
+      page_state=None,
+      slot=None,
   ):
     cfg = self.config
     mesh = self.mesh
@@ -91,8 +95,8 @@ class GemmaDecoderLayer(nn.Module):
         weight_dtype=cfg.weight_dtype,
         dropout_rate=cfg.dropout_rate,
         name="self_attention",
-        float32_qk_product=True,
-        float32_logits=True,
+        float32_qk_product=cfg.float32_qk_product,
+        float32_logits=cfg.float32_logits,
         quant=self.quant,
         kv_quant=quantizations.configure_kv_quant(cfg),
         use_ragged_attention=cfg.use_ragged_attention,

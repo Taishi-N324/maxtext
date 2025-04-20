@@ -23,14 +23,15 @@ from jax.sharding import Mesh
 import jax.numpy as jnp
 from jax.ad_checkpoint import checkpoint_name
 # from jax.experimental.pallas.ops.tpu import flash_attention
-from layers import attentions
-from layers import embeddings
-from layers import linears
-from layers import normalizations
-from layers import models
-from layers import quantizations
+from MaxText.layers import attentions
+from MaxText.layers import embeddings
+from MaxText.layers import linears
+from MaxText.layers import normalizations
+from MaxText.layers import models
+from MaxText.layers import quantizations
 
-import common_types
+from MaxText import common_types
+from MaxText.inference import page_manager
 from typing import Optional
 
 Array = common_types.Array
@@ -74,6 +75,9 @@ class LlamaDecoderLayer(nn.Module):
       decoder_positions,
       deterministic,
       model_mode,
+      slot: Optional[int] = None,
+      page_state: Optional[page_manager.PageState] = None,
+      previous_chunk=None,
   ):
     cfg = self.config
     mesh = self.mesh
@@ -105,6 +109,8 @@ class LlamaDecoderLayer(nn.Module):
         weight_dtype=cfg.weight_dtype,
         dropout_rate=cfg.dropout_rate,
         name="self_attention",
+        float32_qk_product=cfg.float32_qk_product,
+        float32_logits=cfg.float32_logits,
         quant=self.quant,
         kv_quant=quantizations.configure_kv_quant(cfg),
         prefill_cache_axis_order=tuple([int(i) for i in cfg.prefill_cache_axis_order.split(",")]),
@@ -122,6 +128,9 @@ class LlamaDecoderLayer(nn.Module):
         decoder_segment_ids=decoder_segment_ids,
         deterministic=deterministic,
         model_mode=model_mode,
+        slot=slot,
+        page_state=page_state,
+        previous_chunk=previous_chunk,
     )
 
     attention_lnx = nn.with_logical_constraint(

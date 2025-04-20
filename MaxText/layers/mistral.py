@@ -20,20 +20,18 @@ limitations under the License.
 
 
 from typing import Optional
-from layers import quantizations
-from layers import linears
-from layers import initializers
-import jax
+from MaxText.layers import quantizations
+from MaxText.layers import linears
+from MaxText.layers import initializers
 from jax.ad_checkpoint import checkpoint_name
 from jax.sharding import Mesh
 from flax import linen as nn
 import jax.numpy as jnp
-from layers import attentions
-from layers import embeddings
-from layers import normalizations
-from layers import models
-import common_types
-import max_logging
+from MaxText.layers import attentions
+from MaxText.layers import embeddings
+from MaxText.layers import normalizations
+from MaxText.layers import models
+from MaxText import common_types
 
 Array = common_types.Array
 Config = common_types.Config
@@ -47,7 +45,7 @@ RMSNorm = normalizations.RMSNorm
 Quant = quantizations.AqtQuantization
 
 # -----------------------------------------
-# The Decoder Layer for Mistral or Mixtral
+# The Decoder Layer for Mistral
 # -----------------------------------------
 
 
@@ -66,6 +64,9 @@ class MistralDecoderLayer(nn.Module):
       decoder_positions,
       deterministic,
       model_mode,
+      previous_chunk=None,
+      page_state=None,
+      slot=None,
   ):
     cfg = self.config
     mesh = self.mesh
@@ -97,8 +98,13 @@ class MistralDecoderLayer(nn.Module):
         weight_dtype=cfg.weight_dtype,
         dropout_rate=cfg.dropout_rate,
         name="self_attention",
+        float32_qk_product=cfg.float32_qk_product,
+        float32_logits=cfg.float32_logits,
         quant=self.quant,
         kv_quant=quantizations.configure_kv_quant(cfg),
+        prefill_cache_axis_order=tuple([int(i) for i in cfg.prefill_cache_axis_order.split(",")]),
+        ar_cache_axis_order=tuple([int(i) for i in cfg.ar_cache_axis_order.split(",")]),
+        compute_axis_order=tuple([int(i) for i in cfg.compute_axis_order.split(",")]),
     )
 
     attention_lnx = attention_layer(
@@ -108,6 +114,7 @@ class MistralDecoderLayer(nn.Module):
         decoder_segment_ids=decoder_segment_ids,
         deterministic=deterministic,
         model_mode=model_mode,
+        previous_chunk=previous_chunk,
     )
 
     attention_lnx = nn.with_logical_constraint(
@@ -127,32 +134,17 @@ class MistralDecoderLayer(nn.Module):
         hidden_states, ("activation_batch", "activation_norm_length", "activation_embed")
     )
 
-    load_balance_loss = None
-    if cfg.num_experts > 1:
-      mlp_lnx, load_balance_loss = linears.MoeBlock(
-          config=cfg,
-          num_experts=cfg.num_experts,
-          num_experts_per_tok=cfg.num_experts_per_tok,
-          mesh=mesh,
-          kernel_init=initializers.nd_dense_init(1.0, "fan_in", "truncated_normal"),
-          kernel_axes=("embed", None),
-          dtype=cfg.dtype,
-          weight_dtype=cfg.weight_dtype,
-          quant=self.quant,
-      )(hidden_states)
-      mlp_lnx = nn.with_logical_constraint(mlp_lnx, ("activation_batch", "activation_norm_length", "activation_embed"))
-    else:
-      mlp_lnx = linears.MlpBlock(
-          intermediate_dim=cfg.mlp_dim,
-          activations=cfg.mlp_activations,
-          intermediate_dropout_rate=cfg.dropout_rate,
-          dtype=cfg.dtype,
-          weight_dtype=cfg.weight_dtype,
-          name="mlp",
-          config=cfg,
-          quant=self.quant,
-      )(hidden_states, deterministic=deterministic)
-      mlp_lnx = nn.with_logical_constraint(mlp_lnx, ("activation_batch", "activation_norm_length", "activation_embed"))
+    mlp_lnx = linears.MlpBlock(
+        intermediate_dim=cfg.mlp_dim,
+        activations=cfg.mlp_activations,
+        intermediate_dropout_rate=cfg.dropout_rate,
+        dtype=cfg.dtype,
+        weight_dtype=cfg.weight_dtype,
+        name="mlp",
+        config=cfg,
+        quant=self.quant,
+    )(hidden_states, deterministic=deterministic)
+    mlp_lnx = nn.with_logical_constraint(mlp_lnx, ("activation_batch", "activation_norm_length", "activation_embed"))
 
     layer_output = mlp_lnx + intermediate_inputs
     layer_output = nn.Dropout(rate=cfg.dropout_rate, broadcast_dims=(-2,))(layer_output, deterministic=deterministic)
@@ -161,9 +153,6 @@ class MistralDecoderLayer(nn.Module):
         layer_output,
         ("activation_batch", "activation_norm_length", "activation_embed"),
     )
-
-    if cfg.num_experts > 1 and load_balance_loss is not None:
-      self.sow("intermediates", "moe_lb_loss", load_balance_loss)
 
     if cfg.record_internal_nn_metrics:
       self.sow("intermediates", "activation_mean", jnp.mean(layer_output))

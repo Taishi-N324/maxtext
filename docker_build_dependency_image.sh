@@ -78,6 +78,7 @@ build_stable_stack() {
     docker build --no-cache \
         --build-arg JAX_STABLE_STACK_BASEIMAGE=${BASEIMAGE} \
         --build-arg COMMIT_HASH=${COMMIT_HASH} \
+        --build-arg DEVICE="$DEVICE" \
         --network=host \
         -t ${LOCAL_IMAGE_NAME} \
         -f ./maxtext_jax_stable_stack.Dockerfile .
@@ -100,6 +101,9 @@ if [[ -z ${LIBTPU_GCS_PATH+x} ]] ; then
   else
     if [[ ${MODE} == "stable_stack" ]]; then
       build_stable_stack
+    elif [[ ${MANTARAY} == "true" ]]; then
+      echo "Building with benchmark-db"
+      docker build --network host --build-arg MODE=${MODE} --build-arg JAX_VERSION=$JAX_VERSION --build-arg LIBTPU_GCS_PATH=$LIBTPU_GCS_PATH --build-arg DEVICE=$DEVICE -f ./maxtext_db_dependencies.Dockerfile -t ${LOCAL_IMAGE_NAME} .
     else
       docker build --network host --build-arg MODE=${MODE} --build-arg JAX_VERSION=$JAX_VERSION --build-arg LIBTPU_GCS_PATH=$LIBTPU_GCS_PATH --build-arg DEVICE=$DEVICE -f ./maxtext_dependencies.Dockerfile -t ${LOCAL_IMAGE_NAME} .
     fi
