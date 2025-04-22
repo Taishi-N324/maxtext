@@ -107,10 +107,10 @@ def extract_messages_and_mask(example, data_column_name):
   is_prompt = []
   for x in example[data_column_name]:
     if x["role"] == "user":
-      messages.append("<user>" + x["content"] + "</user>")
+      messages.append(f"<start_of_turn>user\n{x['content']}<end_of_turn>\n")
       is_prompt.append(True)
     elif x["role"] == "assistant":
-      messages.append("<assistant>" + x["content"] + "</assistant>")
+      messages.append(f"<start_of_turn>model\n{x['content']}<end_of_turn>\n")
       is_prompt.append(False)
   example["is_prompt"] = is_prompt
   example[data_column_name] = messages
