@@ -60,12 +60,9 @@ do
         "gemma2-9b")
             cp -r tools/hf/configs/gemma-2-9b-it/* "${CHECKPOINT_PATH}"
             ;;
-            # "gemma3-27b")
-            #     cp -r tools/hf/configs/gemma3_27b_pt/* "${CHECKPOINT_PATH}"
-            #     ;;
-            # *)
-            #     echo "Warning: model_name ${model_name} は HF 用 config コピーに未対応です。"
-            #     ;;
+        "gemma2-27b")
+            cp -r tools/hf/configs/gemma-2-27b-it/* "${CHECKPOINT_PATH}"
+            ;;
     esac
 
     # アップロードスクリプトの実行

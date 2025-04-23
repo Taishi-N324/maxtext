@@ -21,13 +21,13 @@ exp_name=$4
 model_name=$5
 export HF_HOME=/mnt/filestore/.cache
 export HUGGINGFACE_HUB_CACHE=/mnt/filestore/.cache
-export PYTHONPATH=$PYTHONPATH:/mnt/filestore/gemma2_sft
+export PYTHONPATH=/mnt/filestore/gemma2_sft
 
 
 echo "----- MaxText -> HF 変換処理を開始 -----"
-# bash /mnt/filestore/gemma2_sft/maxtext/tools/checkpoint_convert/gemma-2/maxtext_to_hf.sh "${start}" "${end}" "${step}" "${exp_name}" "${model_name}"
+bash tools/checkpoint_convert/gemma-2/maxtext_to_hf.sh "${start}" "${end}" "${step}" "${exp_name}" "${model_name}"
 
 echo "----- Hugging Face へのアップロード処理を開始 -----"
-bash /mnt/filestore/gemma2_sft/maxtext/tools/checkpoint_convert/gemma-2/upload.sh "${start}" "${end}" "${step}" "${exp_name}" "${model_name}"
+bash tools/checkpoint_convert/gemma-2/upload.sh "${start}" "${end}" "${step}" "${exp_name}" "${model_name}"
 
-# echo "----- すべての処理が完了しました -----"
+echo "----- すべての処理が完了しました -----"
