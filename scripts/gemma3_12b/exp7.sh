@@ -9,7 +9,7 @@ export GRAIN_TRAIN_FILES="/mnt/filestore/gemma_tpu_grain/**/*.arecord"
 export GRAIN_EVAL_FILES="/mnt/filestore/gemma_tpu_grain/**/*.arecord"
 export TOKENIZER_PATH="/mnt/filestore/checkpoints/gemma3_tokenizer/tokenizer.model" #modelファイルのパス
 export BASE_OUTPUT_DIRECTORY="gs://swallow-asia-b2/checkpoints/"
-export RUN_NAME="gemma3_12b_exp4"
+export RUN_NAME="gemma3_12b_exp7"
 export MODEL_NAME="gemma3-12b"
 export CONVERTED_CHECKPOINT="/mnt/filestore/checkpoints_maxtext/gemma3-12b/0/items"
 
@@ -34,7 +34,7 @@ python3 -u MaxText/train.py MaxText/configs/base.yml \
     max_target_length=8192 \
     steps=50001 \
     learning_rate_schedule_steps=50001 \
-    learning_rate=1.5e-5 \
+    learning_rate=1.25e-5 \
     cosine_learning_rate_final_fraction=0.1 \
     warmup_steps_fraction=0.04 \
     checkpoint_period=500 \

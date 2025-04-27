@@ -10,7 +10,7 @@ export GRAIN_EVAL_FILES="/mnt/filestore/gemma_tpu_grain/**/*.arecord"
 export TOKENIZER_PATH="/mnt/filestore/checkpoints/gemma3_tokenizer/tokenizer.model" #modelファイルのパス
 export BASE_OUTPUT_DIRECTORY="gs://swallow-asia-b2/checkpoints/"
 export RUN_NAME="gemma3_4b_exp7"
-export MODEL_NAME="gemma3-4b"      
+export MODEL_NAME="gemma3-4b"
 export CONVERTED_CHECKPOINT="/mnt/filestore/checkpoints_maxtext/gemma3-4b/0/items"
 
 
