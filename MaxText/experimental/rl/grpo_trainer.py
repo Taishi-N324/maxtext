@@ -49,7 +49,20 @@ from MaxText import maxengine
 
 from MaxText.metric_logger import MetricLogger
 
-from MaxText.vertex_tensorboard import VertexTensorboardManager
+# vertex_tensorboardのインポートを条件付きにする
+try:
+    from MaxText.vertex_tensorboard import VertexTensorboardManager
+    vertex_tensorboard_available = True
+except ImportError:
+    vertex_tensorboard_available = False
+    class VertexTensorboardManager:
+        """Dummy class when vertex_tensorboard is not available"""
+        def __init__(self, *args, **kwargs):
+            pass
+        def create_summary_writer(self, *args, **kwargs):
+            return None
+        def send_model_params(self, *args, **kwargs):
+            pass
 
 from MaxText.experimental.rl import grpo_input_pipeline
 from MaxText.layers import models
@@ -121,7 +134,7 @@ def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, is_
     2. Compute a per-token KL divergence:
          kl = exp(ref_logp - policy_logp) - (ref_logp - policy_logp) - 1.
     3. Compute a scalar reward for each generated completion via reward_fn.
-    4. Group the rewards (each prompt yields “G = num_generations” completions), compute the mean and std,
+    4. Group the rewards (each prompt yields "G = num_generations" completions), compute the mean and std,
        and then compute a normalized advantage.
     5. Compute a per-token loss that is given by
          - [exp(policy_logp - stop_gradient(policy_logp)) * advantage - beta * kl]
@@ -936,10 +949,37 @@ def main(argv: Sequence[str]) -> None:
     raise ValueError(
         "Please set decode_sampling_strategy as 'weighted' and decode_sampling_temperature as a positive number"
     )
-  config_inference = pyconfig.initialize(
-      list(argv)
-      + ["ici_tensor_parallelism=4", "per_device_batch_size=" + str(config.per_device_batch_size * config.num_generations)]
-  )
+  # config_inference を初期化する際に config から並列設定を引き継ぐ
+  argv_inference = list(argv) + [
+      # 元々あった追加引数 (per_device_batch_size は num_generations を考慮)
+      f"per_device_batch_size={config.per_device_batch_size * config.num_generations}",
+      # メインの config から並列化設定を明示的に引き継ぐ
+      f"ici_fsdp_parallelism={config.ici_fsdp_parallelism}",
+      f"ici_fsdp_transpose_parallelism={config.ici_fsdp_transpose_parallelism}",
+      f"ici_tensor_parallelism={config.ici_tensor_parallelism}", # config に存在する tensor parallelism も引き継ぐ
+      f"ici_sequence_parallelism={config.ici_sequence_parallelism}", # 必要であれば他の parallelism も同様に追加
+      f"ici_data_parallelism={config.ici_data_parallelism}",
+      f"ici_pipeline_parallelism={config.ici_pipeline_parallelism}",
+      # 推論エンジンは dot_product attention を使うように強制
+      "attention=dot_product",
+  ]
+  # 不要な重複や上書きされる可能性のある引数を argv_inference から除去する処理を追加 (オプションだが推奨)
+  unique_argv_inference = []
+  seen_keys = set()
+  # 後方の引数を優先するため逆順で処理
+  for arg in reversed(argv_inference):
+      if '=' in arg:
+          key = arg.split('=', 1)[0]
+          if key not in seen_keys:
+              unique_argv_inference.append(arg)
+              seen_keys.add(key)
+      else:
+           # '=' を含まない引数 (例: 設定ファイルパス) はそのまま追加
+           unique_argv_inference.append(arg)
+  # 順序を元に戻す
+  unique_argv_inference.reverse()
+
+  config_inference = pyconfig.initialize(unique_argv_inference)
   max_utils.print_system_information()
   validate_train_config(config)
   os.environ["TFDS_DATA_DIR"] = config.dataset_path
