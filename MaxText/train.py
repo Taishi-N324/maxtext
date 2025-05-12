@@ -50,7 +50,27 @@ import tensorflow as tf
 
 import wandb
 
-from vertex_tensorboard import VertexTensorboardManager
+# vertex_tensorboardのインポートを条件付きにする
+try:
+    from vertex_tensorboard import VertexTensorboardManager
+    vertex_tensorboard_available = True
+except ImportError:
+    vertex_tensorboard_available = False
+    class VertexTensorboardManager:
+        """Dummy class when vertex_tensorboard is not available."""
+        def __init__(self, *args, **kwargs):
+            pass
+        def create_summary_writer(self, *args, **kwargs):
+            # """Returns a dummy writer that does nothing."""
+            class DummyWriter:
+                def add_scalar(self, *args, **kwargs): pass
+                def add_scalars(self, *args, **kwargs): pass
+                def add_text(self, *args, **kwargs): pass
+                def flush(self, *args, **kwargs): pass
+                def close(self, *args, **kwargs): pass
+            return DummyWriter()
+        def send_model_params(self, *args, **kwargs):
+            pass
 # Placeholder: internal
 
 from MaxText.input_pipeline.input_pipeline_interface import create_data_iterator
