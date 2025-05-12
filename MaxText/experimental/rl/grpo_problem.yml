@@ -1,0 +1,35 @@
+base_config: "base.yml"
+
+use_grpo: True
+train_data_columns: 'problem'
+
+learning_rate: 1.e-6
+
+# バッチサイズをさらに小さく設定
+per_device_batch_size: 2
+global_batch_size_to_train_on: 8
+global_batch_size_to_load: 8
+
+# オプティマイザ状態をホストメモリにオフロードしてHBMを節約 -> Segfault発生のため一旦無効化
+# optimizer_memory_host_offload: True
+
+dataset_type: hf # we currently only support Huggingface input pipeline with GRPO.
+
+#TRL
+max_prefill_predict_length: 256
+max_target_length: 512
+
+adam_b2: 0.999
+
+# Group Relative Policy Optimization (GRPO)
+num_generations: 4
+grpo_beta: 0.04
+
+decode_sampling_strategy: "weighted"
+decode_sampling_temperature: 0.9
+async_checkpointing: false
+load_from_hf_repo: "google/gemma-2b-it"
+
+# Explicitly define enable_wandb to prevent KeyError
+enable_wandb: True
+wandb_project: "gemma_tpu_grpo"

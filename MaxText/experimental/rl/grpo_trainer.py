@@ -76,6 +76,7 @@ from cloud_tpu_diagnostics.configuration import stack_trace_configuration
 from ml_goodput_measurement import monitoring
 
 import transformers
+import wandb
 
 # pylint: disable=too-many-positional-arguments
 
@@ -312,6 +313,31 @@ def generate(engine, params, num_decode_steps, decode_state, rng):
   return jnp.transpose(all_tokens, (1, 0))
 
 
+def _concat_and_find_eos(prompt, true_len, completion, tokenizer_model, config):
+    total_len = prompt.shape[0] + completion.shape[0]
+    prompt_mask = jnp.arange(prompt.shape[0]) < true_len
+    trimmed_prompt = jnp.where(prompt_mask, prompt, 0)
+
+    full_seq = jnp.zeros((total_len,), dtype=prompt.dtype)
+    full_seq = full_seq.at[: prompt.shape[0]].set(trimmed_prompt)
+    full_seq = jax.lax.dynamic_update_slice(full_seq, completion, (true_len,))
+
+    # MODIFIED: Search for EOS only in the completion part
+    # and check for multiple EOS token IDs based on config.json
+    eos_id_1 = tokenizer_model.eos_token_id # Usually 1
+    eos_id_107 = 107 # Specific to the Gemma-2-Llama-Swallow model
+
+    indices = jnp.arange(total_len)
+    completion_part_mask = indices >= true_len
+
+    eos_mask = ((full_seq == eos_id_1) | (full_seq == eos_id_107)) & completion_part_mask
+
+    eos_indices = jnp.where(eos_mask, indices, total_len)
+    eos_index = jnp.min(eos_indices)
+
+    return full_seq, eos_index
+
+
 def concatenate_prompt_with_completions(config, tokenizer_model, prompts, true_length, completions):
   """
   Args:
@@ -325,29 +351,10 @@ def concatenate_prompt_with_completions(config, tokenizer_model, prompts, true_l
     eos_positions: Indices indicating the position of the first EOS token in each concatenated sequence.
   """
 
-  def _concat_and_find_eos(prompt, true_len, completion):
-    total_len = prompt.shape[0] + completion.shape[0]
-    prompt_mask = jnp.arange(prompt.shape[0]) < true_len
-    trimmed_prompt = jnp.where(prompt_mask, prompt, 0)
-
-    # Initialize with padded prompt
-    full_seq = jnp.zeros((total_len,), dtype=prompt.dtype)
-    full_seq = full_seq.at[: prompt.shape[0]].set(trimmed_prompt)
-
-    # Dynamically insert completion at true_len position
-    full_seq = jax.lax.dynamic_update_slice(full_seq, completion, (true_len,))
-
-    # Find EOS index
-    eos_mask = full_seq == tokenizer_model.eos_token_id
-    eos_indices = jnp.where(eos_mask, jnp.arange(total_len), total_len)
-    eos_index = jnp.min(eos_indices)
-
-    return full_seq, eos_index
-
-  batched_concat_and_eos = jax.vmap(_concat_and_find_eos, in_axes=(0, 0, 0))
+  batched_concat_and_eos = jax.vmap(_concat_and_find_eos, in_axes=(0, 0, 0, None, None))
   prompts = jnp.repeat(prompts, config.num_generations, axis=0)
   true_length = jnp.repeat(true_length, config.num_generations, axis=0)
-  prompt_completions, eos_positions = batched_concat_and_eos(prompts, true_length, completions)
+  prompt_completions, eos_positions = batched_concat_and_eos(prompts, true_length, completions, tokenizer_model, config)
   return prompt_completions, eos_positions
 
 
@@ -844,6 +851,24 @@ def train_loop(config, config_inference, state=None):
 
     metric_logger.write_metrics(running_gcs_metrics, metrics, step)
 
+    # Log metrics to wandb (train)
+    if hasattr(config, 'enable_wandb') and config.enable_wandb and jax.process_index() == 0:
+        wandb_metrics = {}
+        if "scalar" in metrics:
+            for k, v in metrics["scalar"].items():
+                try:
+                    # Attempt to convert JAX array to Python scalar
+                    value_item = v.item()
+                except AttributeError:
+                    # If it's already a Python scalar or other type
+                    value_item = v
+                except Exception as e:
+                    max_logging.log(f"Warning: Could not convert metric {k} for wandb logging: {e}")
+                    continue # Skip this metric if conversion fails
+                wandb_metrics[f"train/{k}"] = value_item
+        if wandb_metrics: # Only log if there are valid metrics
+            wandb.log(wandb_metrics, step=step)
+
     if config.dump_hlo and step == start_step:
       jax.block_until_ready(state)  # Ensure compilation has finished.
       max_utils.upload_dump(
@@ -918,6 +943,12 @@ def train_loop(config, config_inference, state=None):
           f"argument size: {compiled_stats.argument_size_in_bytes}, "
           f"host temp size: {compiled_stats.host_temp_size_in_bytes}, in bytes."
       )
+
+  # Finish wandb run
+  if hasattr(config, 'enable_wandb') and config.enable_wandb and jax.process_index() == 0:
+    wandb.finish()
+    max_logging.log("wandb run finished.")
+
   return state
 
 
@@ -930,6 +961,18 @@ def main(argv: Sequence[str]) -> None:
   if "xla_tpu_spmd_rng_bit_generator_unsafe" not in os.environ.get("LIBTPU_INIT_ARGS", ""):
     os.environ["LIBTPU_INIT_ARGS"] = os.environ.get("LIBTPU_INIT_ARGS", "") + " --xla_tpu_spmd_rng_bit_generator_unsafe=true"
   config = pyconfig.initialize(argv)
+
+  # Initialize wandb if enabled in config
+  if hasattr(config, 'enable_wandb') and config.enable_wandb and jax.process_index() == 0:
+    wandb_project_name = config.wandb_project if hasattr(config, 'wandb_project') and config.wandb_project else "gemma_tpu_grpo"
+    wandb.init(
+        entity="prj-jalm", # Adjust entity if needed
+        project=wandb_project_name,
+        name=config.run_name,
+        config=vars(config)
+    )
+    max_logging.log(f"Initialized wandb for project: {wandb_project_name}")
+
   if not config.use_grpo:
     raise ValueError("Please set the value of use_grpo to True")
   if config.decode_sampling_strategy == "greedy" or config.decode_sampling_temperature == 0.0:
