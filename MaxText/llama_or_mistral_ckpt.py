@@ -176,6 +176,38 @@ MODEL_PARAMS_DICT = {
         "base_mlp_dim": 36864,
         "vocab": 256000,
     },
+    "gemma3-1b": {
+        "num_layers": 26,
+        "num_heads": 4,
+        "num_kv_heads": 1,
+        "dims_per_head": 256,
+        "base_emb_dim": 1152,
+        "base_mlp_dim": 6912,
+    },
+    "gemma3-4b": {
+        "num_layers": 34,
+        "num_heads": 8,
+        "num_kv_heads": 4,
+        "dims_per_head": 256,
+        "base_emb_dim": 2560,
+        "base_mlp_dim": 10240,
+    },
+    "gemma3-12b": {
+        "num_layers": 48,
+        "num_heads": 16,
+        "num_kv_heads": 8,
+        "dims_per_head": 256,
+        "base_emb_dim": 3840,
+        "base_mlp_dim": 15360,
+    },
+    "gemma3-27b": {
+        "num_layers": 62,
+        "num_heads": 32,
+        "num_kv_heads": 16,
+        "dims_per_head": 128,
+        "base_emb_dim": 5376,
+        "base_mlp_dim": 21504,
+    },
 }
 
 llama3_variants = {"llama3.1", "llama3.3"}
