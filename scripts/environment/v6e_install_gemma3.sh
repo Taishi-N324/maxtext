@@ -24,7 +24,7 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --zone=${ZONE} \
     --worker=all \
     --command="pip install \
-    --upgrade 'jax[tpu]>0.3.0' \
+    --upgrade 'jax[tpu]==0.5.3' \
     -f https://storage.googleapis.com/jax-releases/libtpu_releases.html"
 
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
@@ -48,3 +48,16 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
     --command="echo 'machine api.wandb.ai\
   login user\
     password ${WANDB_PASSWORD}' > ~/.netrc"
+
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="pip install \
+    --upgrade 'jax[tpu]==0.5.3' \
+    -f https://storage.googleapis.com/jax-releases/libtpu_releases.html"
+
+
+gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
+    --zone=${ZONE} \
+    --worker=all \
+    --command="ls /mnt/filestore/gemma3"
