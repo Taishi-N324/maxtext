@@ -1,0 +1,65 @@
+# GRPO Experiment 1 Configuration
+base_config: "grpo.yml"
+run_name: gemma2_2b_grpo_exp1 # Experiment specific run_name, overrides grpo.yml if present
+# Model specific parameters from gemma2-2b.yml
+# These are now directly in this file as per user direction
+model_name: gemma2-2b
+base_emb_dim: 2304
+base_num_query_heads: 8
+base_num_kv_heads: 4
+base_mlp_dim: 9216
+base_num_decoder_layers: 13
+head_dim: 256
+mlp_activations: ['gelu', 'linear']
+vocab_size: 256128
+decoder_block: gemma2
+normalization_layer_epsilon: 1e-06
+logits_via_embedding: True
+final_logits_soft_cap: 30.0
+attn_logits_soft_cap: 50.0
+sliding_window_size: 4096
+use_post_attn_norm: True
+use_post_ffw_norm: True
+
+# GRPO specific settings from original grpo.yml, potentially overridden here
+# (No GRPO specific overrides in this example, but could be added)
+
+# Experiment specific settings from original grpo_exp1.yml
+tokenizer_path: tokyotech-llm/Gemma-2-Llama-Swallow-2b-it-v0.1
+reward_funcs:
+  - "accuracy_reward"
+  - "format_reward"
+  - "len_reward"
+reward_weights:
+  - 1.0
+  - 0.2
+  - 0.2
+
+# Command line equivalent settings from the shell script
+load_from_hf_repo: tokyotech-llm/Gemma-2-Llama-Swallow-2b-it-v0.1
+hf_path: open-r1/OpenR1-Math-220k # This corresponds to dataset_name in HF context
+base_output_directory: "/home/shige/outputs_grpo_custom"
+steps: 10
+log_period: 2
+checkpoint_period: 50 # Adjusted from 10000 to 50 for quick testing
+remat_policy: full # Example, can be other valid policies
+enable_data_shuffling: True
+data_shuffle_seed: 42
+use_vertex_tensorboard: False
+use_iota_embed: True
+
+train_data_columns: "problem"
+
+# Data processing settings for OpenR1-Math-220k
+tokenize_train_data: true
+hf_data_dir: null
+hf_train_files: null
+
+# Memory optimization settings
+per_device_batch_size: 2.0  # Further reduced to avoid OOM without gradient accumulation
+max_target_length: 1024  # Reduced from default 1024 to save memory
+max_prefill_predict_length: 256  # Reduced from default 512
+
+# Potentially other settings that were in grpo.yml or base.yml that might need to be here
+# if the override logic doesn't pick them up as expected.
+# For now, relying on the base_config chain.

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-# pylint: disable=g-bad-todo, abstract-method, consider-using-with, ungrouped-imports, attribute-error
+# pylint: disable=g-bad-todo, abstract-method, consider-using-with, attribute-error
 """
 This script implements Group Relative Policy Optimization (GRPO) training
 using JAX. It optimizes a language model with reinforcement learning by
@@ -27,35 +27,46 @@ import os
 import sys
 import functools
 import queue
-
+import math
+import re
+import sympy as sp
 from typing import Sequence
+from collections.abc import Callable
+
 from absl import app
+
 import tensorflow as tf
-from flax.linen import partitioning as nn_partitioning
-from flax import struct
+
+import numpy as np
+
 import jax
 import jax.numpy as jnp
 from jax import random
-import numpy as np
 
+from flax.linen import partitioning as nn_partitioning
+from flax import struct
+
+from cloud_tpu_diagnostics import diagnostic
+from cloud_tpu_diagnostics.configuration import debug_configuration
+from cloud_tpu_diagnostics.configuration import diagnostic_configuration
+from cloud_tpu_diagnostics.configuration import stack_trace_configuration
+
+from ml_goodput_measurement import monitoring
+
+import transformers
 
 from MaxText import checkpointing
-from MaxText import max_utils
-from MaxText import maxtext_utils
 from MaxText import max_logging
+from MaxText import max_utils
+from MaxText import maxengine
+from MaxText import maxtext_utils
 from MaxText import profiler
 from MaxText import pyconfig
-from MaxText import maxengine
-
-from MaxText.metric_logger import MetricLogger
-
-from MaxText.vertex_tensorboard import VertexTensorboardManager
-
+from MaxText.common_types import Array
 from MaxText.experimental.rl import grpo_input_pipeline
-from MaxText.layers import models
-
 from MaxText.gcp_workload_monitor import GCPWorkloadMonitor
-
+from MaxText.layers import models
+from MaxText.metric_logger import MetricLogger
 from MaxText.train import (
     validate_train_config,
     get_first_step,
@@ -67,16 +78,7 @@ from MaxText.train import (
     check_example_batch,
     setup_mesh_and_model,
 )
-
-from cloud_tpu_diagnostics import diagnostic
-from cloud_tpu_diagnostics.configuration import debug_configuration
-from cloud_tpu_diagnostics.configuration import diagnostic_configuration
-from cloud_tpu_diagnostics.configuration import stack_trace_configuration
-
-from ml_goodput_measurement import monitoring
-
-import transformers
-import wandb
+from MaxText.vertex_tensorboard import VertexTensorboardManager
 
 # pylint: disable=too-many-positional-arguments
 
@@ -111,7 +113,7 @@ class LossAux:
   total_weights: float
 
 
-def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, is_train=True):
+def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, rewards, is_train=True):
   """
   GRPO loss function for training.
 
@@ -121,8 +123,8 @@ def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, is_
          the current model (policy) and the reference model.
     2. Compute a per-token KL divergence:
          kl = exp(ref_logp - policy_logp) - (ref_logp - policy_logp) - 1.
-    3. Compute a scalar reward for each generated completion via reward_fn.
-    4. Group the rewards (each prompt yields “G = num_generations” completions), compute the mean and std,
+    3. Use pre-computed rewards for each generated completion.
+    4. Group the rewards (each prompt yields "G = num_generations" completions), compute the mean and std,
        and then compute a normalized advantage.
     5. Compute a per-token loss that is given by
          - [exp(policy_logp - stop_gradient(policy_logp)) * advantage - beta * kl]
@@ -138,6 +140,7 @@ def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, is_
     dropout_rng: a PRNGKey.
     params: The current model parameters.
     reference_params: The reference model parameters.
+    rewards: Pre-computed rewards array of shape [B×G].
     is_train: Boolean indicating training mode.
 
   Returns:
@@ -195,9 +198,8 @@ def grpo_loss_fn(model, config, data, dropout_rng, params, reference_params, is_
   # loss is computed on non-padding tokens
   per_token_kl = per_token_kl * valid_seq_mask
 
-  # --- (3) Compute a scalar reward for each generated completion via reward_fn.
-  rewards = dummy_reward_len(valid_seq_mask)
-  rewards = jnp.array(rewards)  # shape [BxG]
+  # --- (3) Use pre-computed rewards.
+  # rewards shape: [B×G]
 
   # --- (4) Group rewards and compute normalized advantage.
   G = config.num_generations
@@ -313,31 +315,6 @@ def generate(engine, params, num_decode_steps, decode_state, rng):
   return jnp.transpose(all_tokens, (1, 0))
 
 
-def _concat_and_find_eos(prompt, true_len, completion, tokenizer_model, config):
-    total_len = prompt.shape[0] + completion.shape[0]
-    prompt_mask = jnp.arange(prompt.shape[0]) < true_len
-    trimmed_prompt = jnp.where(prompt_mask, prompt, 0)
-
-    full_seq = jnp.zeros((total_len,), dtype=prompt.dtype)
-    full_seq = full_seq.at[: prompt.shape[0]].set(trimmed_prompt)
-    full_seq = jax.lax.dynamic_update_slice(full_seq, completion, (true_len,))
-
-    # MODIFIED: Search for EOS only in the completion part
-    # and check for multiple EOS token IDs based on config.json
-    eos_id_1 = tokenizer_model.eos_token_id # Usually 1
-    eos_id_107 = 107 # Specific to the Gemma-2-Llama-Swallow model
-
-    indices = jnp.arange(total_len)
-    completion_part_mask = indices >= true_len
-
-    eos_mask = ((full_seq == eos_id_1) | (full_seq == eos_id_107)) & completion_part_mask
-
-    eos_indices = jnp.where(eos_mask, indices, total_len)
-    eos_index = jnp.min(eos_indices)
-
-    return full_seq, eos_index
-
-
 def concatenate_prompt_with_completions(config, tokenizer_model, prompts, true_length, completions):
   """
   Args:
@@ -351,10 +328,29 @@ def concatenate_prompt_with_completions(config, tokenizer_model, prompts, true_l
     eos_positions: Indices indicating the position of the first EOS token in each concatenated sequence.
   """
 
-  batched_concat_and_eos = jax.vmap(_concat_and_find_eos, in_axes=(0, 0, 0, None, None))
+  def _concat_and_find_eos(prompt, true_len, completion):
+    total_len = prompt.shape[0] + completion.shape[0]
+    prompt_mask = jnp.arange(prompt.shape[0]) < true_len
+    trimmed_prompt = jnp.where(prompt_mask, prompt, 0)
+
+    # Initialize with padded prompt
+    full_seq = jnp.zeros((total_len,), dtype=prompt.dtype)
+    full_seq = full_seq.at[: prompt.shape[0]].set(trimmed_prompt)
+
+    # Dynamically insert completion at true_len position
+    full_seq = jax.lax.dynamic_update_slice(full_seq, completion, (true_len,))
+
+    # Find EOS index
+    eos_mask = full_seq == tokenizer_model.eos_token_id
+    eos_indices = jnp.where(eos_mask, jnp.arange(total_len), total_len)
+    eos_index = jnp.min(eos_indices)
+
+    return full_seq, eos_index
+
+  batched_concat_and_eos = jax.vmap(_concat_and_find_eos, in_axes=(0, 0, 0))
   prompts = jnp.repeat(prompts, config.num_generations, axis=0)
   true_length = jnp.repeat(true_length, config.num_generations, axis=0)
-  prompt_completions, eos_positions = batched_concat_and_eos(prompts, true_length, completions, tokenizer_model, config)
+  prompt_completions, eos_positions = batched_concat_and_eos(prompts, true_length, completions)
   return prompt_completions, eos_positions
 
 
@@ -382,19 +378,19 @@ def generate_completions(config, tokenizer_model, engine, data, params, rng):
     else:
       data[k] = v[: config.micro_batch_size_to_train_on]
 
-  rng, rng_load_params = jax.random.split(rng)
-
-  rng, rng_init_decode = jax.random.split(rng_load_params)
+  rng, rng_init_decode = jax.random.split(rng)
   decode_state = engine.init_decode_state(rng_init_decode)
 
   prompts, true_length = data[f"{config.train_data_columns}"], data[f"{config.train_data_columns}_true_length"]
+  rng, rng_prefill = jax.random.split(rng)
   decode_state = jax.jit(
       functools.partial(prefill, engine, params, prompts, true_length, config.num_generations), donate_argnums=(0,)
-  )(decode_state, rng)
+  )(decode_state, rng_prefill)
 
+  rng, rng_generate = jax.random.split(rng)
   completions = jax.jit(
       functools.partial(generate, engine, params, config.max_target_length - config.max_prefill_predict_length)
-  )(decode_state, rng)
+  )(decode_state, rng_generate)
 
   data[f"{config.train_data_columns}_completions"], eos_positions = concatenate_prompt_with_completions(
       config, tokenizer_model, prompts, true_length, completions
@@ -414,6 +410,48 @@ def generate_completions(config, tokenizer_model, engine, data, params, rng):
       f"{config.train_data_columns}_completions_segmentation"
   ] * completion_mask.astype(jnp.int32)
   return data
+
+
+# --- OpenR1 math rewards ---------------------------------------------------
+def _extract_answer(text: str) -> str:
+    for pat in (r"<answer>\s*(.*?)\s*</answer>", r"\\boxed\{(.*?)\}"):
+        m = re.search(pat, text, flags=re.S)
+        if m:
+            return m.group(1).strip()
+    return text.strip().split()[-1]
+
+def _sym_eq(a: str, b: str) -> float:
+    try:
+        return float(sp.simplify(f"({a})-({b})") == 0)
+    except Exception:
+        return 0.0
+
+def accuracy_reward(completions: list[str], gt_answers) -> list[float]:
+    # Handle both single string and list of strings
+    if isinstance(gt_answers, list):
+        # For batch processing, use first ground truth
+        gt = gt_answers[0] if gt_answers else ""
+    else:
+        gt = gt_answers
+    return [_sym_eq(_extract_answer(c), gt) for c in completions]
+
+def format_reward(completions: list[str], gt_answers=None):
+    pat = re.compile(r"<reasoning>.*?</reasoning>.*?<answer>.*?</answer>", re.S)
+    return [1.0 if pat.search(c) else 0.0 for c in completions]
+
+def len_reward(completions: list[str], gt_answers=None, min_len=2048, max_len=8192):
+    scores = []
+    for c in completions:
+        l = len(c.split())
+        if l < min_len:
+            scores.append(0.0)
+        elif l > max_len:
+            scores.append(0.0)
+        else:
+            frac = (l - min_len) / (max_len - min_len)
+            scores.append(0.2 * (1 - math.cos(math.pi * frac)) / 2)
+    return scores
+# --------------------------------------------------------------------------
 
 
 def dummy_reward_len(valid_seq_mask):
@@ -497,13 +535,64 @@ def compute_log_probs(
 # -----------------------------------------------------------------------------
 
 
+def compute_rewards(config, data):
+  """Compute rewards outside of jit context."""
+  # Add default reward configs if not present
+  if not hasattr(config, "reward_funcs"):
+      config.reward_funcs = ["accuracy_reward", "format_reward", "len_reward"]
+  if not hasattr(config, "reward_weights"):
+      config.reward_weights = [1.0, 0.2, 0.2]
+  
+  # Debug: Print available data keys to ensure correct column names
+  print(f"Available data keys: {list(data.keys())}")
+  
+  # Check if solution column exists, fallback to other possible column names
+  solution_key = "solution"
+  if "solution" not in data:
+      if "answer" in data:
+          solution_key = "answer"
+      elif "target" in data:
+          solution_key = "target"
+      else:
+          raise KeyError(f"Neither 'solution', 'answer', nor 'target' found in data. Available keys: {list(data.keys())}")
+
+  # reward_lookup を作成
+  reward_lookup = {
+      "accuracy_reward": accuracy_reward,
+      "format_reward": format_reward,
+      "len_reward": len_reward
+  }
+
+  # decode each completion to str once
+  tokenizer = transformers.AutoTokenizer.from_pretrained(
+      config.tokenizer_path, 
+      add_bos_token=config.add_bos,
+      add_eos_token=config.add_eos, 
+      model_max_length=config.max_target_length,
+      legacy=False,
+      token=getattr(config, 'hf_access_token', None),
+  )
+  
+  tokens = data[f"{config.train_data_columns}_completions"]
+  completions_txt = tokenizer.batch_decode(tokens, skip_special_tokens=True)
+  gt_txt = tokenizer.batch_decode(data[solution_key], skip_special_tokens=True)
+
+  rewards_list = []
+  for fn_name, w in zip(config.reward_funcs, config.reward_weights):
+      fn = reward_lookup[fn_name]
+      rewards_list.append(w * jnp.asarray(fn(completions_txt, gt_txt), dtype=jnp.float32))
+  rewards = jnp.sum(jnp.stack(rewards_list, axis=0), axis=0)   # shape [B×G]
+  
+  return rewards
+
+
 def train_step(model, config, state_mesh_shardings, state, data, dropout_rng):
   """
 
   Args:
     model: A nn.Module
     state: A pytree of the current state of the model
-    data: Batch of data to apply to the model
+    data: Batch of data to apply to the model (should include pre-computed rewards)
     dropout_rng: A key to use to generate rng for dropout
 
   Returns:
@@ -514,7 +603,11 @@ def train_step(model, config, state_mesh_shardings, state, data, dropout_rng):
   """
   state, reference_params = _split_grpo_state(state)
   state_mesh_shardings, reference_params_sharding = _split_grpo_state(state_mesh_shardings)
-  extra_grpo_args = [reference_params]
+  
+  # Use pre-computed rewards from data
+  rewards = data["rewards"]
+  
+  extra_grpo_args = [reference_params, rewards]
   _loss_fn = grpo_loss_fn
 
   if config.gradient_accumulation_steps > 1:
@@ -606,9 +699,12 @@ def train_step(model, config, state_mesh_shardings, state, data, dropout_rng):
 def eval_step(model, config, state, data, dropout_rng):
   """eval_step no backprop and new state compared with train_step."""
 
-  reference_params, extra_grpo_args, _loss_fn = [], [], grpo_loss_fn
   state, reference_params = _split_grpo_state(state)
-  extra_grpo_args = [reference_params]
+  
+  # Use pre-computed rewards from data
+  rewards = data["rewards"]
+  
+  extra_grpo_args = [reference_params, rewards]
   _loss_fn = grpo_loss_fn
 
   eval_loss_fn = functools.partial(_loss_fn, model, config, data, dropout_rng, is_train=False)
@@ -784,7 +880,7 @@ def train_loop(config, config_inference, state=None):
 
   data_sharding = in_shard_train[1]
   param_sharding = state_mesh_shardings.params
-  p_generate_completions = jax.jit(
+  p_generate_completions: Callable[[dict, dict, Array], Array] = jax.jit(
       functools.partial(generate_completions, config, tokenizer_model, engine),
       in_shardings=(data_sharding, param_sharding, None),
       out_shardings=data_sharding,
@@ -821,6 +917,7 @@ def train_loop(config, config_inference, state=None):
     with jax.profiler.StepTraceAnnotation("train", step_num=step):
       record_goodput(recorder, config, recorder.record_data_loading_start_time if recorder else None)
       example_batch = load_next_batch(data_iterator, example_batch, config)
+      example_batch = jax.lax.with_sharding_constraint(example_batch, data_sharding)
       record_goodput(recorder, config, recorder.record_data_loading_end_time if recorder else None)
       check_example_batch(config, example_batch=example_batch)
       # pylint: disable=not-callable
@@ -828,6 +925,10 @@ def train_loop(config, config_inference, state=None):
       record_goodput(recorder, config, recorder.record_step_start_time if recorder else None, step)
       rng, rng_gen = random.split(rng)
       example_batch = p_generate_completions(example_batch, state.params, rng_gen)
+
+      # Compute rewards before jit context
+      rewards = compute_rewards(config, example_batch)
+      example_batch["rewards"] = rewards
 
       # TODO: ensure this partitioning is correct
       with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
@@ -850,24 +951,6 @@ def train_loop(config, config_inference, state=None):
         sys.exit()
 
     metric_logger.write_metrics(running_gcs_metrics, metrics, step)
-
-    # Log metrics to wandb (train)
-    if hasattr(config, 'enable_wandb') and config.enable_wandb and jax.process_index() == 0:
-        wandb_metrics = {}
-        if "scalar" in metrics:
-            for k, v in metrics["scalar"].items():
-                try:
-                    # Attempt to convert JAX array to Python scalar
-                    value_item = v.item()
-                except AttributeError:
-                    # If it's already a Python scalar or other type
-                    value_item = v
-                except Exception as e:
-                    max_logging.log(f"Warning: Could not convert metric {k} for wandb logging: {e}")
-                    continue # Skip this metric if conversion fails
-                wandb_metrics[f"train/{k}"] = value_item
-        if wandb_metrics: # Only log if there are valid metrics
-            wandb.log(wandb_metrics, step=step)
 
     if config.dump_hlo and step == start_step:
       jax.block_until_ready(state)  # Ensure compilation has finished.
@@ -895,6 +978,10 @@ def train_loop(config, config_inference, state=None):
       for eval_batch in eval_data_iterator:
         if config.eval_steps > 0 and eval_step_count >= config.eval_steps:
           break
+        # Compute rewards before jit context for eval
+        rewards = compute_rewards(config, eval_batch)
+        eval_batch["rewards"] = rewards
+        
         with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
           eval_metrics = p_eval_step(state, eval_batch, rng)
         cumulative_eval_metrics["scalar"]["eval/total_loss"] += float(eval_metrics["scalar"]["evaluation/total_loss"])
@@ -943,12 +1030,6 @@ def train_loop(config, config_inference, state=None):
           f"argument size: {compiled_stats.argument_size_in_bytes}, "
           f"host temp size: {compiled_stats.host_temp_size_in_bytes}, in bytes."
       )
-
-  # Finish wandb run
-  if hasattr(config, 'enable_wandb') and config.enable_wandb and jax.process_index() == 0:
-    wandb.finish()
-    max_logging.log("wandb run finished.")
-
   return state
 
 
@@ -961,18 +1042,6 @@ def main(argv: Sequence[str]) -> None:
   if "xla_tpu_spmd_rng_bit_generator_unsafe" not in os.environ.get("LIBTPU_INIT_ARGS", ""):
     os.environ["LIBTPU_INIT_ARGS"] = os.environ.get("LIBTPU_INIT_ARGS", "") + " --xla_tpu_spmd_rng_bit_generator_unsafe=true"
   config = pyconfig.initialize(argv)
-
-  # Initialize wandb if enabled in config
-  if hasattr(config, 'enable_wandb') and config.enable_wandb and jax.process_index() == 0:
-    wandb_project_name = config.wandb_project if hasattr(config, 'wandb_project') and config.wandb_project else "gemma_tpu_grpo"
-    wandb.init(
-        entity="prj-jalm", # Adjust entity if needed
-        project=wandb_project_name,
-        name=config.run_name,
-        config=vars(config)
-    )
-    max_logging.log(f"Initialized wandb for project: {wandb_project_name}")
-
   if not config.use_grpo:
     raise ValueError("Please set the value of use_grpo to True")
   if config.decode_sampling_strategy == "greedy" or config.decode_sampling_temperature == 0.0:

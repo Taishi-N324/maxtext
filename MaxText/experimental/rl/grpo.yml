@@ -1,4 +1,4 @@
-base_config: "base.yml"
+base_config: "../../configs/base.yml"
 
 use_grpo: True
 train_data_columns: 'prompt'
@@ -20,3 +20,11 @@ grpo_beta: 0.04
 decode_sampling_strategy: "weighted"
 decode_sampling_temperature: 0.9
 async_checkpointing: false
+
+# Common MaxText Settings (with defaults)
+dump_hlo: false
+jax_debug_log_modules: ""
+skip_jax_distributed_system: false
+inference_benchmark_test: false
+cpu_definition_test: false
+hardware: "tpu"

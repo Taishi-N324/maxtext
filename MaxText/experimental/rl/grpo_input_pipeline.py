@@ -77,6 +77,21 @@ def preprocessing_pipeline(
   if global_batch_size % global_mesh.size != 0:
     raise ValueError("Batch size should be divisible number of global devices.")
 
+  # Get all available columns before tokenization
+  all_columns = list(dataset.features.keys())
+  columns_to_keep = data_column_names.copy() if isinstance(data_column_names, list) else [data_column_names]
+  
+  # Add solution column if it exists (for reward computation)
+  if "solution" in all_columns:
+    columns_to_keep.append("solution")
+  elif "answer" in all_columns:
+    columns_to_keep.append("answer")
+  elif "target" in all_columns:
+    columns_to_keep.append("target")
+  
+  # Remove duplicates while preserving order
+  columns_to_keep = list(dict.fromkeys(columns_to_keep))
+  
   if tokenize:
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         tokenizer_path,
@@ -86,7 +101,7 @@ def preprocessing_pipeline(
         legacy=False,
         token=hf_access_token,
     )
-
+    
     dataset = dataset.map(
         _input_pipeline_utils.tokenization,
         batched=True,
@@ -94,10 +109,11 @@ def preprocessing_pipeline(
             "hf_tokenizer": tokenizer,
             "truncation": True,
             "max_length": max_target_length - 1,
-            "column_names": data_column_names,
+            "column_names": columns_to_keep,
         },
     )
-  dataset = dataset.select_columns(data_column_names)
+  
+  dataset = dataset.select_columns(columns_to_keep)
   dataset = _input_pipeline_utils.HFDataSource(
       dataset,
       dataloading_host_index,
